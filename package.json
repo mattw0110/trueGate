@@ -1,0 +1,63 @@
+{
+  "name": "truegate",
+  "version": "0.1.0",
+  "description": "Local-first middleware proxy for AI coding tools — injects project governance and validates LLM responses",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "truegate": "./dist/cli/index.cjs"
+  },
+  "main": "./dist/proxy/server.cjs",
+  "module": "./dist/proxy/server.js",
+  "exports": {
+    ".": {
+      "import": "./dist/proxy/server.js",
+      "require": "./dist/proxy/server.cjs"
+    }
+  },
+  "scripts": {
+    "dev": "tsx src/cli/index.ts",
+    "build": "tsup",
+    "start": "node dist/cli/index.cjs serve",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "truegate": "tsx src/cli/index.ts"
+  },
+  "dependencies": {
+    "@fastify/formbody": "^7.4.0",
+    "commander": "^12.1.0",
+    "fastify": "^4.28.1",
+    "pino": "^9.3.2",
+    "undici": "^6.19.8",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.1",
+    "@typescript-eslint/eslint-plugin": "^8.3.0",
+    "@typescript-eslint/parser": "^8.3.0",
+    "@vitest/coverage-v8": "^2.0.5",
+    "eslint": "^9.9.1",
+    "prettier": "^3.3.3",
+    "tsup": "^8.2.4",
+    "tsx": "^4.17.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "ai",
+    "proxy",
+    "governance",
+    "llm",
+    "middleware"
+  ],
+  "license": "MIT"
+}
