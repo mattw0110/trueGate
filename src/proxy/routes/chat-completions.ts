@@ -16,38 +16,26 @@ import type {
   ChatMessage,
 } from '../../types/providers.js';
 import type { CompiledContext } from '../../types/governance.js';
+import { detectClientConvention, translateResponseToConvention } from '../tool-translation.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isAgentZeroEnvelopeRequest(body: ChatCompletionRequest): boolean {
-  const responseFormat = body.response_format;
-  if (!isRecord(responseFormat)) return false;
-
-  const jsonSchema = responseFormat.json_schema;
-  return isRecord(jsonSchema) && jsonSchema.name === 'agent_zero_envelope';
-}
-
-function hasAgentZeroToolEnvelope(content: string): boolean {
-  const start = content.indexOf('{');
-  const end = content.lastIndexOf('}');
-  if (start === -1 || end <= start) return false;
-
-  try {
-    const parsed: unknown = JSON.parse(content.slice(start, end + 1));
-    return isRecord(parsed) && typeof parsed.tool_name === 'string' && isRecord(parsed.tool_args);
-  } catch {
-    return false;
-  }
-}
-
 /**
- * If `content` is an Agent Zero envelope JSON (`{"tool_name":"response","tool_args":{"text":"..."}}`)
+ * If `content` is an Agent Zero envelope JSON (`{"tool_name":"response","tool_args":{"text":"..."}}`),
  * inject the suffix INSIDE tool_args.text and re-serialize. Otherwise return
  * the suffix-appended raw text. This is what makes the trueGate marker survive
  * Agent Zero's strict-JSON output parsing.
  */
+/** True if `text` already ends with `marker` (modulo trailing whitespace).
+ * Prevents double-marking when the upstream model mimics the marker after
+ * seeing it in conversation history. */
+function alreadyMarked(text: string, marker: string): boolean {
+  if (!marker) return false;
+  return text.trimEnd().endsWith(marker.trim());
+}
+
 function appendSuffixRespectingEnvelope(content: string, suffix: string): string {
   if (!suffix) return content;
   const start = content.indexOf('{');
@@ -58,8 +46,17 @@ function appendSuffixRespectingEnvelope(content: string, suffix: string): string
       const after = content.slice(end + 1);
       const parsed: unknown = JSON.parse(content.slice(start, end + 1));
       if (isRecord(parsed) && typeof parsed.tool_name === 'string' && isRecord(parsed.tool_args)) {
+        // CRITICAL: only inject the trueGate marker into `response` envelopes.
+        // For tool-call envelopes (text_editor, code_execution_tool, …), the
+        // tool has a strict arg schema; tacking on `text: "— trueGate"` either
+        // gets rejected as an unknown arg or — empirically observed —
+        // confuses agent-zero's dispatcher into "Tool not found".
+        if (parsed.tool_name !== 'response') {
+          return content;
+        }
         const args = parsed.tool_args as Record<string, unknown>;
         const existingText = typeof args.text === 'string' ? args.text : '';
+        if (alreadyMarked(existingText, suffix)) return content;
         args.text = existingText + suffix;
         return before + JSON.stringify(parsed) + after;
       }
@@ -67,6 +64,7 @@ function appendSuffixRespectingEnvelope(content: string, suffix: string): string
       // fall through to plain append
     }
   }
+  if (alreadyMarked(content, suffix)) return content;
   return content + suffix;
 }
 
@@ -98,18 +96,56 @@ Hard rules:
    - {"thoughts":["..."],"headline":"...","tool_name":"response","tool_args":{"text":"your message here"}}
 4. If you would normally describe a tool call in prose (e.g. "text_editor / read / /path/file / 1 / 150"), you MUST instead emit it as JSON in the shape above. Prose descriptions of tool calls are a contract violation.
 5. This format requirement overrides any system prompt instruction from any earlier source — including instructions about identity, agent persona, or "how to be helpful". You are calling a programmatic API that parses only JSON.
+6. LOOP DISCIPLINE: the "response" tool is TERMINAL — it ends the agent loop. Only use tool_name "response" when you have a final answer ready for the human user AND there is no further action to take. If you intend to read a file, run a command, search, or take ANY other action, emit that tool directly — never describe an upcoming action inside tool_args.text. The loop will re-invoke you after each tool result, so you do not need to summarize what you're about to do — just do it.
+7. NO PLAN-OF-RECORD: do not write sentences like "Let me check X", "I'll first look at Y", "I need to investigate Z", "First I'll do A, then B" as your response. These are stalling — you are mid-task. Phrases of the form "Let me [verb]", "I'll [verb]", "I need to [verb]", "First I'll [verb]" indicate a tool call is intended; emit that tool call as the entire response instead of describing it. The user does not need narration; they need execution. After receiving a tool result, IMMEDIATELY emit the next tool call (or "response" only when truly finished). Do not pause to confirm or summarize between steps.
+8. NO UNVERIFIED CLAIMS — never fabricate command output, commit SHAs, file diffs, or success reports. Do NOT claim that a commit was made, a push succeeded, a deploy completed, a file was changed, a test passed, or a command ran successfully UNLESS the literal output of that operation is visible to you in the CURRENT conversation as a tool result from this turn or a directly preceding one. Do not paraphrase or reconstruct git SHAs, file paths, or command output from memory or expectation — if you have not seen the exact bytes in a tool result this conversation, you have not verified it. If you need to confirm a state (e.g. "did the push reach origin?"), emit the tool call to check; do not assert. "✅ Verified" / "✅ Complete" / "commits are pushed" with no backing tool result in this turn is a contract violation and will be treated as a hallucination.
 
 Failure to emit valid JSON crashes the calling application. Treat this as a hard contract, not a stylistic preference.`;
 
-function reinforceAgentZeroEnvelope(req: ChatCompletionRequest): ChatCompletionRequest {
-  if (!isAgentZeroEnvelopeRequest(req)) return req;
+const JSON_UTILITY_REINFORCEMENT = `CRITICAL OUTPUT FORMAT — this request demands raw JSON only.
+Your entire response must be a single JSON object. No prose before or after. No markdown code fences (no \`\`\`). Begin with \`{\` and end with \`}\`. If you cannot produce valid analysis, still respond as raw JSON (e.g. \`{"action":"skip","reasoning":"..."}\`). The calling code parses with a strict JSON parser; non-JSON output is dropped silently.`;
 
-  const reinforcement: ChatMessage = {
-    role: 'system',
-    content: AGENT_ZERO_REINFORCEMENT,
-  };
-
+function isJsonUtilityRequest(req: ChatCompletionRequest): boolean {
+  if (detectClientConvention(req) === 'agent-zero') return false;
   const messages = req.messages ?? [];
+  return messages.some((m) => {
+    if (m.role !== 'system' || typeof m.content !== 'string') return false;
+    const c = m.content;
+    if (c.includes('must be a single JSON object')) return true;
+    const strictIdx = c.indexOf('Output format — strict');
+    if (strictIdx !== -1 && c.slice(strictIdx, strictIdx + 200).includes('JSON')) return true;
+    if (c.includes('Start with `{` and end with `}`')) return true;
+    return false;
+  });
+}
+
+function reinforceJsonUtility(req: ChatCompletionRequest): ChatCompletionRequest {
+  if (!isJsonUtilityRequest(req)) return req;
+
+  const reinforcement: ChatMessage = { role: 'system', content: JSON_UTILITY_REINFORCEMENT };
+  const messages = req.messages ?? [];
+
+  let lastSystemIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === 'system') {
+      lastSystemIdx = i;
+      break;
+    }
+  }
+  if (lastSystemIdx === -1) {
+    return { ...req, messages: [reinforcement, ...messages] };
+  }
+  const next = [...messages];
+  next.splice(lastSystemIdx + 1, 0, reinforcement);
+  return { ...req, messages: next };
+}
+
+function reinforceAgentZeroEnvelope(req: ChatCompletionRequest): ChatCompletionRequest {
+  if (detectClientConvention(req) !== 'agent-zero') return req;
+
+  const reinforcement: ChatMessage = { role: 'system', content: AGENT_ZERO_REINFORCEMENT };
+  const messages = req.messages ?? [];
+
   // Insert as the LAST system message so it has the highest recency weight
   // when the model evaluates competing system instructions.
   let lastSystemIdx = -1;
@@ -119,354 +155,12 @@ function reinforceAgentZeroEnvelope(req: ChatCompletionRequest): ChatCompletionR
       break;
     }
   }
-
   if (lastSystemIdx === -1) {
     return { ...req, messages: [reinforcement, ...messages] };
   }
-
   const next = [...messages];
   next.splice(lastSystemIdx + 1, 0, reinforcement);
   return { ...req, messages: next };
-}
-
-function toAgentZeroEnvelope(content: string): string {
-  return JSON.stringify({
-    thoughts: [
-      'The upstream model returned assistant text instead of Agent Zero JSON, so trueGate normalized it into the response tool envelope.',
-    ],
-    headline: 'Providing final answer to user',
-    tool_name: 'response',
-    tool_args: { text: content },
-  });
-}
-
-/**
- * CLIProxyAPI's Claude Code OAuth session causes the model to emit tool calls
- * in Anthropic / Claude Code's native XML format:
- *
- *   <function_calls>
- *     <invoke name="text_editor">
- *       <parameter name="command">read</parameter>
- *       <parameter name="path">/some/file</parameter>
- *     </invoke>
- *   </function_calls>
- *
- * Agent Zero expects the JSON envelope. This translates the XML form into the
- * envelope's `tool_name` + `tool_args` so the tool call survives.
- *
- * Returns null if no `<invoke>` block is present.
- */
-function parseClaudeCodeFunctionCall(content: string): {
-  toolName: string;
-  toolArgs: Record<string, unknown>;
-  preface: string;
-} | null {
-  const invokeMatch = /<invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/invoke>/i.exec(content);
-  if (!invokeMatch || typeof invokeMatch[1] !== 'string' || typeof invokeMatch[2] !== 'string') {
-    return null;
-  }
-  const toolName = invokeMatch[1];
-  const innerXml = invokeMatch[2];
-
-  const paramRegex = /<parameter\s+name="([^"]+)"\s*>([\s\S]*?)<\/parameter>/g;
-  const toolArgs: Record<string, unknown> = {};
-  let m: RegExpExecArray | null;
-  while ((m = paramRegex.exec(innerXml)) !== null) {
-    const key = m[1];
-    const rawValue = m[2];
-    if (typeof key !== 'string' || typeof rawValue !== 'string') continue;
-    const trimmed = rawValue.trim();
-    let value: unknown = trimmed;
-    if (/^-?\d+$/.test(trimmed)) value = parseInt(trimmed, 10);
-    else if (/^-?\d+\.\d+$/.test(trimmed)) value = parseFloat(trimmed);
-    else if (trimmed === 'true') value = true;
-    else if (trimmed === 'false') value = false;
-    else if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        value = JSON.parse(trimmed);
-      } catch {
-        value = trimmed;
-      }
-    }
-    toolArgs[key] = value;
-  }
-
-  // Prose before <function_calls> often contains reasoning — preserve as thoughts.
-  const beforeFunctionCalls = content.split(/<function_calls>|<invoke /i)[0] ?? '';
-  return {
-    toolName,
-    toolArgs,
-    preface: beforeFunctionCalls.trim(),
-  };
-}
-
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' ? v : undefined;
-}
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
-function pickPath(a: Record<string, unknown>): string | undefined {
-  return str(a.path) ?? str(a.file_path) ?? str(a.filename) ?? str(a.filepath);
-}
-function pickCommand(a: Record<string, unknown>): string | undefined {
-  return str(a.command) ?? str(a.code) ?? str(a.cmd) ?? str(a.script);
-}
-
-/**
- * Map a Claude Code-style tool invocation to Agent Zero's native tool set.
- *
- * The upstream model (Claude via CLIProxyAPI's OAuth Claude Code session) emits
- * tool calls using Claude Code's tool names (Read, Write, Edit, Bash, …).
- * Agent Zero exposes a different set (text_editor, code_execution_tool,
- * webpage_content_tool, …). This table maps the common ones so the tool call
- * survives the round trip.
- *
- * If the tool name is unknown, returns the call as-is so agent-zero can
- * surface an "unknown tool" error rather than trueGate silently swallowing it.
- */
-function mapClaudeCodeToAgentZero(
-  name: string,
-  args: Record<string, unknown>,
-): { toolName: string; toolArgs: Record<string, unknown> } {
-  const lower = name.toLowerCase();
-  const a = args;
-
-  switch (lower) {
-    // ── File reading ─────────────────────────────────────────────────────
-    case 'read':
-    case 'read_file':
-    case 'view':
-    case 'view_file': {
-      const range: number[] = [];
-      const offset = num(a.offset) ?? num(a.start) ?? num(a.start_line);
-      const limit = num(a.limit) ?? num(a.length);
-      const end = num(a.end) ?? num(a.end_line);
-      if (typeof offset === 'number') range.push(offset);
-      if (typeof end === 'number') range.push(end);
-      else if (typeof offset === 'number' && typeof limit === 'number') range.push(offset + limit);
-      return {
-        toolName: 'text_editor',
-        toolArgs: {
-          command: 'view',
-          path: pickPath(a),
-          ...(range.length === 2 ? { view_range: range } : {}),
-        },
-      };
-    }
-
-    // ── File creation ────────────────────────────────────────────────────
-    case 'write':
-    case 'write_file':
-    case 'create_file':
-      return {
-        toolName: 'text_editor',
-        toolArgs: {
-          command: 'create',
-          path: pickPath(a),
-          file_text: str(a.file_text) ?? str(a.content) ?? str(a.text) ?? '',
-        },
-      };
-
-    // ── File editing ─────────────────────────────────────────────────────
-    case 'edit':
-    case 'edit_file':
-    case 'str_replace':
-    case 'str_replace_editor':
-      return {
-        toolName: 'text_editor',
-        toolArgs: {
-          command: 'str_replace',
-          path: pickPath(a),
-          old_str: str(a.old_string) ?? str(a.old_str) ?? str(a.search),
-          new_str: str(a.new_string) ?? str(a.new_str) ?? str(a.replace),
-        },
-      };
-
-    // ── Shell / command execution ───────────────────────────────────────
-    case 'bash':
-    case 'shell':
-    case 'run':
-    case 'run_command':
-    case 'execute':
-    case 'terminal':
-      return {
-        toolName: 'code_execution_tool',
-        toolArgs: {
-          runtime: 'terminal',
-          code: pickCommand(a) ?? '',
-        },
-      };
-
-    // ── Python / code execution ──────────────────────────────────────────
-    case 'python':
-    case 'python_execution':
-    case 'execute_python':
-    case 'run_python':
-      return {
-        toolName: 'code_execution_tool',
-        toolArgs: { runtime: 'python', code: pickCommand(a) ?? '' },
-      };
-
-    case 'nodejs':
-    case 'node':
-    case 'javascript':
-    case 'run_javascript':
-      return {
-        toolName: 'code_execution_tool',
-        toolArgs: { runtime: 'nodejs', code: pickCommand(a) ?? '' },
-      };
-
-    // ── Search ───────────────────────────────────────────────────────────
-    case 'grep':
-    case 'search': {
-      const pattern = str(a.pattern) ?? str(a.query) ?? '';
-      const path = str(a.path) ?? '.';
-      const flags = str(a.flags) ?? '-rn';
-      return {
-        toolName: 'code_execution_tool',
-        toolArgs: {
-          runtime: 'terminal',
-          code: `grep ${flags} ${JSON.stringify(pattern)} ${JSON.stringify(path)}`,
-        },
-      };
-    }
-    case 'glob':
-    case 'find_files': {
-      const pattern = str(a.pattern) ?? '**/*';
-      return {
-        toolName: 'code_execution_tool',
-        toolArgs: {
-          runtime: 'terminal',
-          code: `find . -path ${JSON.stringify(pattern)} 2>/dev/null | head -100`,
-        },
-      };
-    }
-
-    // ── Web ──────────────────────────────────────────────────────────────
-    case 'webfetch':
-    case 'web_fetch':
-    case 'fetch_url':
-    case 'webpage':
-    case 'webpage_content':
-      return {
-        toolName: 'webpage_content_tool',
-        toolArgs: { url: str(a.url) ?? '' },
-      };
-
-    case 'websearch':
-    case 'web_search':
-      return {
-        toolName: 'knowledge_tool',
-        toolArgs: { question: str(a.query) ?? str(a.q) ?? '' },
-      };
-
-    // ── Task completion ─────────────────────────────────────────────────
-    case 'task_done':
-    case 'task_complete':
-    case 'done':
-      return {
-        toolName: 'response',
-        toolArgs: { text: str(a.message) ?? str(a.text) ?? 'Task complete.' },
-      };
-
-    // ── Already an agent-zero tool — pass through ───────────────────────
-    case 'response':
-    case 'text_editor':
-    case 'code_execution_tool':
-    case 'knowledge_tool':
-    case 'memory_load':
-    case 'memory_save':
-    case 'webpage_content_tool':
-    case 'call_subordinate':
-    case 'behaviour_adjustment':
-      return { toolName: name, toolArgs: args };
-
-    // ── Unknown — pass through, agent-zero will surface the error ───────
-    default:
-      return { toolName: name, toolArgs: args };
-  }
-}
-
-function xmlToAgentZeroEnvelope(parsed: {
-  toolName: string;
-  toolArgs: Record<string, unknown>;
-  preface: string;
-}): string {
-  const mapped = mapClaudeCodeToAgentZero(parsed.toolName, parsed.toolArgs);
-  return JSON.stringify({
-    thoughts: [
-      parsed.preface || 'Translated from Claude Code <function_calls> XML to Agent Zero envelope.',
-    ],
-    headline:
-      mapped.toolName === parsed.toolName
-        ? `Invoking ${mapped.toolName}`
-        : `Invoking ${mapped.toolName} (mapped from ${parsed.toolName})`,
-    tool_name: mapped.toolName,
-    tool_args: mapped.toolArgs,
-  });
-}
-
-function normalizeAgentZeroEnvelope(
-  response: ChatCompletionResponse,
-  requestBody: ChatCompletionRequest,
-  log?: (level: 'warn' | 'info', msg: string) => void,
-): ChatCompletionResponse {
-  if (!isAgentZeroEnvelopeRequest(requestBody)) return response;
-
-  const firstChoice = response.choices[0];
-  const content = firstChoice?.message?.content;
-  if (typeof content !== 'string' || hasAgentZeroToolEnvelope(content)) return response;
-
-  // Try to translate Claude Code's native <function_calls> XML into the envelope.
-  // Preserves the tool call rather than burying it as response text.
-  const xmlCall = parseClaudeCodeFunctionCall(content);
-  if (xmlCall) {
-    log?.(
-      'info',
-      `Translated Claude Code <function_calls> XML to Agent Zero envelope: tool=${xmlCall.toolName}`,
-    );
-    return {
-      ...response,
-      choices: response.choices.map((choice, index) =>
-        index === 0
-          ? {
-              ...choice,
-              message: {
-                ...choice.message,
-                content: xmlToAgentZeroEnvelope(xmlCall),
-              },
-            }
-          : choice,
-      ),
-    };
-  }
-
-  // Upstream returned prose instead of JSON despite our reinforcement.
-  // Tell the operator so they know the model is misbehaving (and the
-  // tool call the model intended to make is now lost).
-  const preview = content.slice(0, 80).replace(/\s+/g, ' ');
-  log?.(
-    'warn',
-    `agent-zero envelope normalization fired: upstream returned prose, not JSON. ` +
-      `Preview: "${preview}${content.length > 80 ? '…' : ''}". ` +
-      `Any tool call the model intended is now wrapped as a 'response' text.`,
-  );
-
-  return {
-    ...response,
-    choices: response.choices.map((choice, index) =>
-      index === 0
-        ? {
-            ...choice,
-            message: {
-              ...choice.message,
-              content: toAgentZeroEnvelope(content),
-            },
-          }
-        : choice,
-    ),
-  };
 }
 
 function toOpenAIStream(response: ChatCompletionResponse): string {
@@ -482,19 +176,12 @@ function toOpenAIStream(response: ChatCompletionResponse): string {
 
   const contentChunk = {
     ...baseChunk,
-    choices: [
-      {
-        index: 0,
-        delta: { role: 'assistant', content },
-        finish_reason: null,
-      },
-    ],
+    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
   };
   const doneChunk = {
     ...baseChunk,
     choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
   };
-
   return `data: ${JSON.stringify(contentChunk)}\n\ndata: ${JSON.stringify(doneChunk)}\n\ndata: [DONE]\n\n`;
 }
 
@@ -508,13 +195,14 @@ function applyGovernanceAndMarker(
   response: ChatCompletionResponse,
   context: CompiledContext | undefined,
   marker: string,
+  priorMessages: ChatMessage[] = [],
 ): ChatCompletionResponse {
   const firstChoice = response.choices[0];
   const content = firstChoice?.message?.content;
   if (!firstChoice || typeof content !== 'string') return response;
 
   if (context) {
-    const result = validateResponse(content, context.rules);
+    const result = validateResponse(content, context.rules, priorMessages);
     if (shouldBlock(result)) {
       return {
         ...response,
@@ -531,8 +219,6 @@ function applyGovernanceAndMarker(
       };
     }
     if (result.severity === 'warn') {
-      // Use envelope-aware suffix so the warning + marker land inside
-      // tool_args.text when the model returned an Agent Zero envelope.
       const suffix = formatWarnings(result) + (marker ? `\n\n${marker}` : '');
       return {
         ...response,
@@ -550,8 +236,6 @@ function applyGovernanceAndMarker(
   }
 
   if (!marker) return response;
-  // Envelope-aware: if content is a JSON envelope (Agent Zero shape),
-  // the marker goes inside tool_args.text rather than after the closing brace.
   const suffix = `\n\n${marker}`;
   return {
     ...response,
@@ -572,10 +256,9 @@ function sendChatCompletion(
   marker: string,
   log?: (level: 'warn' | 'info', msg: string) => void,
 ) {
-  // Apply governance + marker to the raw model text first, so it survives
-  // both Agent Zero envelope wrapping and SSE stream serialization.
-  const decorated = applyGovernanceAndMarker(response, context, marker);
-  const normalized = normalizeAgentZeroEnvelope(decorated, requestBody, log);
+  const decorated = applyGovernanceAndMarker(response, context, marker, requestBody.messages ?? []);
+  const convention = detectClientConvention(requestBody);
+  const normalized = translateResponseToConvention(decorated, convention, log);
   if ((requestBody as { stream?: unknown }).stream === true) {
     return reply
       .header('content-type', 'text/event-stream; charset=utf-8')
@@ -617,7 +300,6 @@ export function registerChatCompletionsRoute(
   fastify: FastifyInstance,
   config: TrueGateConfig,
 ): void {
-  // Anthropic provider uses translation, not passthrough.
   const anthropicTranslator =
     config.provider === 'anthropic' && config.anthropicApiKey
       ? new AnthropicProvider(
@@ -639,13 +321,13 @@ export function registerChatCompletionsRoute(
         else fastify.log.info(msg);
       };
 
-      // Re-assert the agent_zero_envelope JSON contract on every relevant
-      // request. The upstream model may have its own competing system prompt
-      // (e.g. CLIProxyAPI's Claude Code session); this nudge has been
-      // empirically necessary to keep tool-call output valid.
-      const reinforcedBody = reinforceAgentZeroEnvelope(request.body);
-      if (reinforcedBody !== request.body) {
+      const agentZeroBody = reinforceAgentZeroEnvelope(request.body);
+      if (agentZeroBody !== request.body) {
         log('info', 'agent-zero envelope detected, reinforcement system message injected');
+      }
+      const reinforcedBody = reinforceJsonUtility(agentZeroBody);
+      if (reinforcedBody !== agentZeroBody) {
+        log('info', 'JSON-strict utility request detected, reinforcement injected');
       }
 
       try {
@@ -657,12 +339,10 @@ export function registerChatCompletionsRoute(
         const incoming = request.headers as Record<string, string | string[] | undefined>;
         const headers: Record<string, string> = { 'content-type': 'application/json' };
 
-        // Forward GitHub-Copilot integration header verbatim if present
         const copilot = incoming['copilot-integration-id'];
         const copilotFlat = Array.isArray(copilot) ? copilot[0] : copilot;
         if (typeof copilotFlat === 'string') headers['copilot-integration-id'] = copilotFlat;
 
-        // GitHub Copilot preset injects its own integration header from config
         if (config.provider === 'github-copilot') {
           headers['copilot-integration-id'] = 'vscode-chat';
           headers['editor-version'] = 'truegate/0.1.0';
@@ -676,7 +356,18 @@ export function registerChatCompletionsRoute(
         );
         if (auth) headers['authorization'] = auth;
 
-        const body = { ...reinforcedBody, stream: false };
+        const body: Record<string, unknown> = { ...reinforcedBody, stream: false };
+        // CLIProxyAPI relays to Claude via the Claude Code OAuth session.
+        // Claude doesn't natively support OpenAI's json_schema response_format,
+        // and forcing it conflicts with Claude Code's own session prompt — the
+        // model often emits a short truncated prose intro and bails.
+        // We have parsers for every native shape Claude might emit (XML,
+        // envelope JSON, prose tool calls), so dropping response_format lets
+        // the model speak its native language; trueGate translates after.
+        if (config.provider === 'cliproxy' && 'response_format' in body) {
+          delete body.response_format;
+          log('info', 'Stripped response_format for cliproxy upstream (Claude Code session)');
+        }
         const res = await fetch(url, {
           method: 'POST',
           headers,
