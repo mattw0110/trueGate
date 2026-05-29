@@ -6,7 +6,6 @@ notes: |
   and the AI should read them on demand when relevant — they are kept under
   ~200 lines each so they fit in context without crowding out task work.
 ---
-
 # Operator Governance
 
 This is the **index** of operator-wide policy that applies to every project. Per-project files (`CLAUDE.md`, `.truegate/governance.md`, `AGENTS.md`, `.cursor/rules/*.mdc`) extend these rules — they cannot remove them.
@@ -19,10 +18,10 @@ trueGate has NO per-project artifacts. Projects own their own conventions; the o
 
 1. **Security floor** — non-negotiable (no destructive shell, no leaked credentials, no TLS bypass, no `DROP TABLE`). trueGate's response validator blocks these regardless of any source.
 2. **Project documentation** (highest authoritative layer for the project):
-   - `CLAUDE.md`
-   - `AGENTS.md`
-   - `.cursor/rules/*.mdc`
-   - any other `docs/ai/INSTRUCTIONS.md` the project maintains
+  - `CLAUDE.md`
+  - `AGENTS.md`
+  - `.cursor/rules/*.mdc`
+  - any other `docs/ai/INSTRUCTIONS.md` the project maintains
 3. **This operator-wide guidance** — applies when the project is silent. Defers to the project on every conflict; the AI is instructed to follow the project and note the conflict in its response.
 
 ## Cross-agent consistency
@@ -39,42 +38,42 @@ Multiple AI coding tools may be active at once (Claude Code, Cursor, Continue.de
 
 ## Topic index — read on demand
 
-| Topic                                                | Read when                                                                          |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [topics/code-style.md](./topics/code-style.md)       | Writing or refactoring any code — naming, function shape, error handling, comments |
-| [topics/security.md](./topics/security.md)           | Auth, secrets, input validation, anything touching user data                       |
-| [topics/accessibility.md](./topics/accessibility.md) | Generating any UI markup or interaction                                            |
-| [topics/performance.md](./topics/performance.md)     | Anything user-perceivable — Core Web Vitals + API latency budgets                  |
-| [topics/frontend.md](./topics/frontend.md)           | React 19, Next.js 15, Tailwind v4, forms, state, images                            |
-| [topics/backend.md](./topics/backend.md)             | HTTP APIs, idempotency, observability, OAuth 2.1, rate limiting                    |
-| [topics/database.md](./topics/database.md)           | Schema, indexes, migrations (expand/contract), connection pooling                  |
-| [topics/testing.md](./topics/testing.md)             | What to test, fixtures, flaky-test diagnosis                                       |
-| [topics/architecture.md](./topics/architecture.md)   | SOLID, layering, hexagonal, DDD-lite, ADRs                                         |
-| [topics/documentation.md](./topics/documentation.md) | READMEs, ADRs, when comments are appropriate                                       |
-| [topics/git-and-pr.md](./topics/git-and-pr.md)       | Commits (Conventional Commits), branches, PR descriptions                          |
+| Topic | Read when |
+| --- | --- |
+| [code-style.md](./topics/code-style.md) | Writing or refactoring any code — naming, function shape, error handling, comments |
+| [security.md](./topics/security.md) | Auth, secrets, input validation, anything touching user data |
+| [accessibility.md](./topics/accessibility.md) | Generating any UI markup or interaction |
+| [performance.md](./topics/performance.md) | Anything user-perceivable — Core Web Vitals + API latency budgets |
+| [frontend.md](./topics/frontend.md) | React 19, Next.js 15, Tailwind v4, forms, state, images |
+| [backend.md](./topics/backend.md) | HTTP APIs, idempotency, observability, OAuth 2.1, rate limiting |
+| [database.md](./topics/database.md) | Schema, indexes, migrations (expand/contract), connection pooling |
+| [testing.md](./topics/testing.md) | What to test, fixtures, flaky-test diagnosis |
+| [architecture.md](./topics/architecture.md) | SOLID, layering, hexagonal, DDD-lite, ADRs |
+| [documentation.md](./topics/documentation.md) | READMEs, ADRs, when comments are appropriate |
+| [git-and-pr.md](./topics/git-and-pr.md) | Commits (Conventional Commits), branches, PR descriptions |
 
 ### Component recipes — drop-in accessible UI patterns
 
-| File                                                       | Use when                                                              |
-| ---------------------------------------------------------- | --------------------------------------------------------------------- |
-| [components/forms.md](./components/forms.md)               | Building a form (validation, error display, Server Action submission) |
-| [components/buttons.md](./components/buttons.md)           | Any button — variants, icon buttons, loading states                   |
-| [components/data-display.md](./components/data-display.md) | Tables, lists, empty states, loading skeletons                        |
-| [components/navigation.md](./components/navigation.md)     | Nav bars, breadcrumbs, tabs, command palette                          |
-| [components/feedback.md](./components/feedback.md)         | Toasts, alerts, modals, status messages                               |
+| File | Use when |
+| --- | --- |
+| [forms.md](./components/forms.md) | Building a form (validation, error display, Server Action submission) |
+| [buttons.md](./components/buttons.md) | Any button — variants, icon buttons, loading states |
+| [data-display.md](./components/data-display.md) | Tables, lists, empty states, loading skeletons |
+| [navigation.md](./components/navigation.md) | Nav bars, breadcrumbs, tabs, command palette |
+| [feedback.md](./components/feedback.md) | Toasts, alerts, modals, status messages |
 
 ### Design pattern templates
 
-| File                                                           | Use when                                                      |
-| -------------------------------------------------------------- | ------------------------------------------------------------- |
-| [patterns/error-handling.md](./patterns/error-handling.md)     | Where to throw, where to catch, structured error responses    |
-| [patterns/data-fetching.md](./patterns/data-fetching.md)       | Server-first fetching, the four UI states, cache invalidation |
-| [patterns/state-management.md](./patterns/state-management.md) | Local vs URL vs server vs context vs store — decision tree    |
-| [patterns/auth-boundaries.md](./patterns/auth-boundaries.md)   | Where AuthN/AuthZ checks belong, defense in depth             |
+| File | Use when |
+| --- | --- |
+| [error-handling.md](./patterns/error-handling.md) | Where to throw, where to catch, structured error responses |
+| [data-fetching.md](./patterns/data-fetching.md) | Server-first fetching, the four UI states, cache invalidation |
+| [state-management.md](./patterns/state-management.md) | Local vs URL vs server vs context vs store — decision tree |
+| [auth-boundaries.md](./patterns/auth-boundaries.md) | Where AuthN/AuthZ checks belong, defense in depth |
 
 ### External authorities
 
-- [references/README.md](./references/README.md) — curated index of canonical sources (RFCs, MDN, OWASP, framework docs)
+- [README.md](./references/README.md) — curated index of canonical sources (RFCs, MDN, OWASP, framework docs)
 
 ## Always (the operator-wide floor)
 
@@ -94,7 +93,7 @@ These apply everywhere; don't bother re-reading a topic file to confirm them:
 - **Comments explain WHY, not WHAT.** Code shows what; comments explain hidden constraints
 - **One env-access module per project.** No sprinkling `process.env.X` across the codebase
 - **Reject `any` / `dynamic` / `interface{}`** outside well-justified boundaries
-- See [topics/code-style.md](./topics/code-style.md) for the full set
+- See [code-style.md](./topics/code-style.md) for the full set
 
 ## Definition of Done (operator-wide minimum)
 
@@ -119,8 +118,7 @@ A change is complete when:
 ## When in doubt
 
 1. Check the relevant `topics/*.md` file
-2. Check the project's `CLAUDE.md`
-3. Check `~/.truegate/references/README.md` for the canonical external source
-4. Ask before guessing
+2. Check `~/.truegate/references/README.md` for the canonical external source
+3. Ask before guessing
 
 — trueGate operator policy v1
