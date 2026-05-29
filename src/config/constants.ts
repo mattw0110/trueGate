@@ -19,6 +19,22 @@ export const PROVIDER_BASE_URLS = {
   cliproxy: 'http://127.0.0.1:8317',
 } as const;
 
+import type { ProviderName } from '../types/runtime.js';
+
+/**
+ * Default priority order for tie-breaking when multiple upstreams claim the
+ * same model. Lower index wins. See plan §2.
+ */
+export const DEFAULT_PROVIDER_PRIORITY: ProviderName[] = [
+  'openai',
+  'anthropic',
+  'github-copilot',
+  'cliproxy',
+  'ollama',
+  'lmstudio',
+  'custom',
+];
+
 export const ANTHROPIC_VERSION = '2023-06-01';
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-sonnet-4-5';
 export const OPENAI_BASE_URL = PROVIDER_BASE_URLS.openai;

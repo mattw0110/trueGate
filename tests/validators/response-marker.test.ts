@@ -3,6 +3,7 @@ import {
   resolveMarker,
   markerSuffix,
   appendMarker,
+  formatMarker,
 } from '../../src/validators/reporting/response-marker.js';
 
 describe('resolveMarker', () => {
@@ -36,5 +37,22 @@ describe('appendMarker', () => {
 
   it('returns original text when marker is empty', () => {
     expect(appendMarker('Hello.', '')).toBe('Hello.');
+  });
+});
+
+describe('formatMarker', () => {
+  it('appends provider/model suffix', () => {
+    expect(formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-5')).toBe(
+      '— trueGate · cliproxy/claude-sonnet-4-5',
+    );
+  });
+
+  it('returns base marker when provider/model missing', () => {
+    expect(formatMarker('— trueGate')).toBe('— trueGate');
+    expect(formatMarker('— trueGate', 'openai')).toBe('— trueGate');
+  });
+
+  it('honors opt-out (empty base marker)', () => {
+    expect(formatMarker('', 'openai', 'gpt-4o')).toBe('');
   });
 });

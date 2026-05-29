@@ -13,6 +13,21 @@ export function resolveMarker(config: Pick<TrueGateConfig, 'responseMarker'>): s
 }
 
 /**
+ * Format the marker with an upstream/model suffix so every response
+ * self-documents which backend served it. Example:
+ *   formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-5')
+ *     → '— trueGate · cliproxy/claude-sonnet-4-5'
+ *
+ * If `baseMarker` is empty (operator opt-out), the result is empty regardless.
+ * If `provider`/`model` are missing, returns the base marker unchanged.
+ */
+export function formatMarker(baseMarker: string, provider?: string, model?: string): string {
+  if (!baseMarker) return '';
+  if (!provider || !model) return baseMarker;
+  return `${baseMarker} · ${provider}/${model}`;
+}
+
+/**
  * Suffix to append to a piece of response text. Empty marker → empty suffix.
  * Always begins with a blank line so it stands on its own.
  */

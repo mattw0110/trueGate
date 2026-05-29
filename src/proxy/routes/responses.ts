@@ -14,20 +14,15 @@ import {
   resolveMarker,
   markerSuffix,
   appendMarker,
+  formatMarker,
 } from '../../validators/reporting/response-marker.js';
-import { PROVIDER_BASE_URLS } from '../../config/constants.js';
-import type { TrueGateConfig } from '../../types/runtime.js';
+import { pickUpstreamForModel } from '../../registry/route-model.js';
+import type { TrueGateConfig, UpstreamRegistry } from '../../types/runtime.js';
 import type {
   ResponsesRequest,
   ResponsesResponse,
   ResponsesOutputItem,
 } from '../../types/responses-api.js';
-
-function defaultUpstream(config: TrueGateConfig): string {
-  if (config.upstreamUrl) return config.upstreamUrl;
-  if (config.provider === 'cliproxy') return PROVIDER_BASE_URLS.cliproxy;
-  return PROVIDER_BASE_URLS.openai;
-}
 
 function applyMarkerToResponse(resp: ResponsesResponse, marker: string): ResponsesResponse {
   if (!marker) return resp;
@@ -58,13 +53,19 @@ function applyMarkerToResponse(resp: ResponsesResponse, marker: string): Respons
   return out;
 }
 
-export function registerResponsesRoute(fastify: FastifyInstance, config: TrueGateConfig): void {
-  // Accept base with or without trailing /v1.
-  const base = defaultUpstream(config).replace(/\/$/, '').replace(/\/v1$/, '');
-  const url = `${base}/v1/responses`;
-  const marker = resolveMarker(config);
+export function registerResponsesRoute(
+  fastify: FastifyInstance,
+  config: TrueGateConfig,
+  registry: UpstreamRegistry,
+): void {
+  const baseMarker = resolveMarker(config);
 
   fastify.post<{ Body: ResponsesRequest }>('/v1/responses', async (request, reply) => {
+    const requestedModel = (request.body as { model?: string }).model ?? '';
+    const { endpoint } = pickUpstreamForModel(requestedModel, registry, config);
+    const base = endpoint.baseUrl.replace(/\/$/, '').replace(/\/v1$/, '');
+    const url = `${base}/v1/responses`;
+    const marker = formatMarker(baseMarker, endpoint.provider, requestedModel);
     const context = request.governanceContext;
     let body = request.body;
 

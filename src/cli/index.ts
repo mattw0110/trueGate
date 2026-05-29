@@ -73,6 +73,7 @@ program
   )
   .option('--response-marker <text>', "Suffix appended to every response (default: '— trueGate')")
   .option('--no-response-marker', 'Disable the response marker suffix')
+  .option('--no-auto', 'Skip startup probes; use only the configured provider (locked mode)')
   .action(async (options) => {
     await runServe(options);
   });

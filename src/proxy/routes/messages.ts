@@ -10,21 +10,19 @@ import {
   formatWarnings,
   formatBlockedResponse,
 } from '../../validators/reporting/warning-formatter.js';
-import { resolveMarker, markerSuffix } from '../../validators/reporting/response-marker.js';
-import { PROVIDER_BASE_URLS } from '../../config/constants.js';
-import type { TrueGateConfig } from '../../types/runtime.js';
+import {
+  resolveMarker,
+  markerSuffix,
+  formatMarker,
+} from '../../validators/reporting/response-marker.js';
+import { pickUpstreamForModel } from '../../registry/route-model.js';
+import type { TrueGateConfig, UpstreamRegistry } from '../../types/runtime.js';
 import type {
   AnthropicNativeRequest,
   AnthropicNativeResponse,
   AnthropicTextBlock,
   AnthropicContentBlock,
 } from '../../types/anthropic.js';
-
-function defaultMessagesUpstream(config: TrueGateConfig): string {
-  if (config.upstreamUrl) return config.upstreamUrl;
-  if (config.provider === 'cliproxy') return PROVIDER_BASE_URLS.cliproxy;
-  return PROVIDER_BASE_URLS.anthropic;
-}
 
 /**
  * Append the trueGate marker to the LAST text block in the content array so
@@ -56,9 +54,12 @@ function appendMarkerToContent(
   return [...content, { type: 'text', text: marker } satisfies AnthropicTextBlock];
 }
 
-export function registerMessagesRoute(fastify: FastifyInstance, config: TrueGateConfig): void {
-  const passthrough = new AnthropicPassthrough(defaultMessagesUpstream(config));
-  const marker = resolveMarker(config);
+export function registerMessagesRoute(
+  fastify: FastifyInstance,
+  config: TrueGateConfig,
+  registry: UpstreamRegistry,
+): void {
+  const baseMarker = resolveMarker(config);
 
   fastify.post<{ Body: AnthropicNativeRequest }>('/v1/messages', async (request, reply) => {
     const context = request.governanceContext;
@@ -73,6 +74,10 @@ export function registerMessagesRoute(fastify: FastifyInstance, config: TrueGate
       body = rest as AnthropicNativeRequest;
     }
 
+    const requestedModel = body.model ?? '';
+    const { endpoint } = pickUpstreamForModel(requestedModel, registry, config);
+
+    const passthrough = new AnthropicPassthrough(endpoint.baseUrl);
     let response: AnthropicNativeResponse;
     try {
       const passOpts: {
@@ -81,7 +86,8 @@ export function registerMessagesRoute(fastify: FastifyInstance, config: TrueGate
       } = {
         forwardHeaders: request.headers as Record<string, string | string[] | undefined>,
       };
-      if (config.anthropicApiKey !== undefined) passOpts.apiKey = config.anthropicApiKey;
+      const key = endpoint.apiKey ?? config.anthropicApiKey;
+      if (key !== undefined) passOpts.apiKey = key;
       response = await passthrough.messages(body, passOpts);
     } catch (err) {
       fastify.log.error(err, 'Anthropic passthrough error');
@@ -93,6 +99,8 @@ export function registerMessagesRoute(fastify: FastifyInstance, config: TrueGate
         },
       });
     }
+
+    const marker = formatMarker(baseMarker, endpoint.provider, response.model ?? requestedModel);
 
     if (!context) {
       return reply.send({

@@ -1,5 +1,6 @@
 import { readUserConfig, resolveConfig, type ConfigOverrides } from '../../config/user-config.js';
 import { buildServer } from '../../proxy/server.js';
+import { buildUpstreamRegistry, formatRegistrySummary } from '../../registry/upstream-registry.js';
 import type { ProviderName } from '../../types/runtime.js';
 
 export interface ServeFlags {
@@ -14,6 +15,8 @@ export interface ServeFlags {
   githubToken?: string;
   stripClientSystem?: boolean;
   responseMarker?: string | false;
+  /** Commander `--no-auto` produces `auto: false`. Default is true. */
+  auto?: boolean;
 }
 
 const VALID: ProviderName[] = [
@@ -35,7 +38,10 @@ function parseProvider(raw: string | undefined): ProviderName | undefined {
 export async function runServe(flags: ServeFlags): Promise<void> {
   const overrides: ConfigOverrides = {};
   const provider = parseProvider(flags.provider);
-  if (provider) overrides.provider = provider;
+  if (provider) {
+    overrides.provider = provider;
+    overrides.providerForced = true;
+  }
   if (flags.port) overrides.port = parseInt(flags.port, 10);
   if (flags.logLevel) overrides.logLevel = flags.logLevel;
   if (flags.projectRoot) overrides.projectRoot = flags.projectRoot;
@@ -44,11 +50,9 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   if (flags.anthropicKey) overrides.anthropicApiKey = flags.anthropicKey;
   if (flags.githubToken) overrides.githubToken = flags.githubToken;
   if (flags.stripClientSystem !== undefined) overrides.stripClientSystem = flags.stripClientSystem;
-  // Commander gives `false` when --no-response-marker is passed
   if (flags.responseMarker === false) overrides.responseMarker = '';
   else if (typeof flags.responseMarker === 'string')
     overrides.responseMarker = flags.responseMarker;
-  // --token is a generic "use this for whichever provider is active"
   if (flags.token) {
     overrides.upstreamApiKey = flags.token;
     if (overrides.provider === 'openai' || provider === 'openai') {
@@ -63,14 +67,17 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   const userConfig = await readUserConfig();
   const config = resolveConfig(userConfig, overrides);
 
-  const server = buildServer(config);
+  const noAuto = flags.auto === false;
+  const registry = await buildUpstreamRegistry(config, { noAuto });
+
+  for (const line of formatRegistrySummary(registry)) console.log(line);
+
+  const server = buildServer(config, registry);
 
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`trueGate proxy listening on http://localhost:${config.port}`);
-    console.log(`  → provider: ${config.provider}`);
     console.log(`  → project root: ${config.projectRoot}`);
-    if (config.upstreamUrl) console.log(`  → upstream URL: ${config.upstreamUrl}`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);

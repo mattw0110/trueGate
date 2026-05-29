@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { z } from 'zod';
-import type { ProviderName, TrueGateConfig } from '../types/runtime.js';
+import type { ProviderName, TrueGateConfig, TrueGateMode } from '../types/runtime.js';
 import { DEFAULT_LOG_LEVEL, DEFAULT_PORT } from './constants.js';
 
 const PROVIDER_NAMES: [ProviderName, ...ProviderName[]] = [
@@ -28,6 +28,9 @@ export const UserConfigSchema = z
     upstreamApiKey: z.string().optional(),
     stripClientSystem: z.boolean().optional(),
     responseMarker: z.string().optional(),
+    mode: z.enum(['auto', 'locked']).optional(),
+    modelOverrides: z.record(z.enum(PROVIDER_NAMES)).optional(),
+    providerPriority: z.array(z.enum(PROVIDER_NAMES)).optional(),
   })
   .partial();
 
@@ -73,6 +76,10 @@ export interface ConfigOverrides {
   upstreamApiKey?: string;
   stripClientSystem?: boolean;
   responseMarker?: string;
+  mode?: TrueGateMode;
+  providerForced?: boolean;
+  modelOverrides?: Record<string, ProviderName>;
+  providerPriority?: ProviderName[];
 }
 
 /**
@@ -90,6 +97,9 @@ export function resolveConfig(
     (env['TRUEGATE_PROVIDER'] as ProviderName | undefined) ??
     userConfig.provider ??
     'openai';
+  const providerForced =
+    overrides.providerForced ??
+    (overrides.provider !== undefined || env['TRUEGATE_PROVIDER'] !== undefined);
 
   const port =
     overrides.port ??
@@ -124,12 +134,21 @@ export function resolveConfig(
   const responseMarker =
     overrides.responseMarker ?? env['TRUEGATE_RESPONSE_MARKER'] ?? userConfig.responseMarker;
 
+  const mode: TrueGateMode | undefined =
+    overrides.mode ?? (env['TRUEGATE_MODE'] as TrueGateMode | undefined) ?? userConfig.mode;
+  const modelOverrides = overrides.modelOverrides ?? userConfig.modelOverrides;
+  const providerPriority = overrides.providerPriority ?? userConfig.providerPriority;
+
   const config: TrueGateConfig = {
     port: isNaN(port) ? DEFAULT_PORT : port,
     logLevel,
     projectRoot,
     provider,
   };
+  if (providerForced) config.providerForced = true;
+  if (mode !== undefined) config.mode = mode;
+  if (modelOverrides !== undefined) config.modelOverrides = modelOverrides;
+  if (providerPriority !== undefined) config.providerPriority = providerPriority;
   if (openAiApiKey !== undefined) config.openAiApiKey = openAiApiKey;
   if (anthropicApiKey !== undefined) config.anthropicApiKey = anthropicApiKey;
   if (githubToken !== undefined) config.githubToken = githubToken;

@@ -1,25 +1,9 @@
-import { fetch } from 'undici';
 import { readUserConfig, resolveConfig } from '../../config/user-config.js';
-import { PROVIDER_BASE_URLS } from '../../config/constants.js';
+import { buildUpstreamRegistry } from '../../registry/upstream-registry.js';
+import { probe } from '../../registry/probe.js';
 
 function pad(s: string, n: number): string {
   return (s + ' '.repeat(n)).slice(0, n);
-}
-
-async function probe(
-  url: string,
-  timeoutMs = 3000,
-): Promise<{ ok: boolean; status?: number; err?: string }> {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { method: 'GET', signal: controller.signal });
-    return { ok: true, status: res.status };
-  } catch (err) {
-    return { ok: false, err: err instanceof Error ? err.message : String(err) };
-  } finally {
-    clearTimeout(t);
-  }
 }
 
 export async function runStatus(): Promise<void> {
@@ -28,35 +12,43 @@ export async function runStatus(): Promise<void> {
   const proxyUrl = `http://localhost:${config.port}`;
 
   console.log('━━━━ trueGate status ━━━━');
-  console.log(`provider:    ${config.provider}`);
+  console.log(`mode:        ${config.mode ?? (config.providerForced ? 'locked' : 'auto')}`);
+  console.log(`provider:    ${config.provider}${config.providerForced ? ' (forced)' : ''}`);
   console.log(`port:        ${config.port}`);
   console.log(`projectRoot: ${config.projectRoot}`);
   console.log();
 
   // proxy itself
   console.log('Checking proxy…');
-  const proxy = await probe(proxyUrl);
-  if (proxy.ok) {
-    console.log(`  ${pad('proxy', 12)} OK (http ${proxy.status})`);
+  const proxyResult = await probe(proxyUrl);
+  if (proxyResult.ok) {
+    console.log(`  ${pad('proxy', 12)} OK (http ${proxyResult.status})`);
   } else {
-    console.log(`  ${pad('proxy', 12)} DOWN — ${proxy.err}`);
+    console.log(`  ${pad('proxy', 12)} DOWN — ${proxyResult.err}`);
     console.log('  → start it with: truegate serve');
   }
 
-  // upstream
-  const upstream =
-    config.upstreamUrl ?? PROVIDER_BASE_URLS[config.provider as keyof typeof PROVIDER_BASE_URLS];
-  if (upstream) {
-    console.log(`Checking upstream (${upstream})…`);
-    const up = await probe(upstream);
-    if (up.ok) {
-      console.log(`  ${pad('upstream', 12)} reachable (http ${up.status})`);
-    } else {
-      console.log(`  ${pad('upstream', 12)} unreachable — ${up.err}`);
+  // Upstreams via registry
+  console.log();
+  console.log('Probing upstreams…');
+  const registry = await buildUpstreamRegistry(config);
+  if (registry.endpoints.length === 0) {
+    console.log('  (no upstream endpoints configured)');
+  } else {
+    for (const ep of registry.endpoints) {
+      const status = ep.reachable ? `✓ reachable` : `✗ unreachable`;
+      const models = ep.models.length === 0 ? 'no models' : `${ep.models.length} models`;
+      const sample = ep.models.slice(0, 5).join(', ');
+      const more = ep.models.length > 5 ? `, +${ep.models.length - 5} more` : '';
+      console.log(
+        `  ${pad(ep.provider, 16)} ${pad(ep.baseUrl, 32)} ${status}  ${models}${sample ? ` — ${sample}${more}` : ''}`,
+      );
     }
+    console.log();
+    console.log(`mode=${registry.mode}, priority=${registry.priority.join('>')}`);
+    if (registry.forcedProvider) console.log(`forced=${registry.forcedProvider}`);
   }
 
-  // governance
   console.log();
   console.log('Run `truegate inspect` to see the governance compiled for this project root.');
 }
