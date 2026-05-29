@@ -5,3 +5,15 @@ dist/
 coverage/
 *.log
 .DS_Store
+.claude
+.cursor
+.serena
+
+# trueGate operator-mutable state (config, knowledge base, cliproxy creds)
+.state/
+
+# Nimbalyst IDE local files (plans, session data)
+nimbalyst-local/
+
+# Bundled third-party binaries (downloaded by scripts/bootstrap-cliproxy.sh)
+vendor/

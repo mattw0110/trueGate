@@ -126,7 +126,7 @@ Cody's enterprise/custom provider:
 
 Copilot does **not** support a configurable endpoint — it always calls GitHub's own API. trueGate cannot intercept Copilot's inline completions.
 
-What you _can_ do:
+What you *can* do:
 
 - Use trueGate as the **upstream for Copilot Chat replacements** via Continue.dev or Cody
 - Use trueGate's `github-copilot` provider preset to route OTHER tools (e.g. Codex CLI, your own SDK) through your Copilot subscription:
@@ -211,28 +211,23 @@ Run trueGate with permissive CORS (planned — see [#cors](#cors-future) below) 
 
 ---
 
-## Multi-project setup
+## Using trueGate across all your work
 
-trueGate caches governance per **project root**. To use one trueGate process across many repos, set `TRUEGATE_PROJECT_ROOT` on each client invocation:
+trueGate is installed **once** and runs continuously as your personal governance layer. A single instance on port 8457 covers every IDE, every project, every AI tool on your machine. There is no per-project setup — governance lives in trueGate's own `data/` and `.state/` directories, not in your repos.
 
-```bash
-# Project A
-TRUEGATE_PROJECT_ROOT=/repos/projectA claude   # would need a wrapper
+Point all your IDEs at the same address:
+
+```
+http://localhost:8457/v1
 ```
 
-Or — simpler — run **one trueGate per project**, on different ports:
+If you want to run trueGate on a non-standard port (e.g. to avoid a conflict):
 
 ```bash
-# Repo A
-cd /repos/projectA
-TRUEGATE_PORT=8457 TRUEGATE_PROVIDER=cliproxy truegate serve &
-
-# Repo B
-cd /repos/projectB
-TRUEGATE_PORT=8458 TRUEGATE_PROVIDER=cliproxy truegate serve &
+truegate serve --port 8458
 ```
 
-Point each IDE workspace at the matching port.
+Then point your IDEs at `http://localhost:8458/v1` instead.
 
 ---
 

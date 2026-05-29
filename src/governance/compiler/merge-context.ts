@@ -1,26 +1,15 @@
 import { loadGlobalContext } from '../loaders/global-loader.js';
-import { loadClaudeContext } from '../loaders/claude-loader.js';
-import { loadAgentsContext } from '../loaders/agents-loader.js';
-import { loadCursorContext } from '../loaders/cursor-loader.js';
 import type { GovernanceFile } from '../../types/governance.js';
 
 /**
- * Load governance sources, project-first.
- *
- * The PROJECT's own documentation (CLAUDE.md, AGENTS.md, .cursor/rules/) is
- * the source of truth for that project. The operator-wide knowledge base
- * at ~/.truegate/ is supplementary guidance that defers to the project.
- *
- * trueGate intentionally does NOT install per-project artifacts. Projects
- * own their conventions; trueGate provides the operator-wide layer.
+ * Load governance for the proxy. trueGate is a global CLI — the only
+ * governance it injects is the operator-wide layer at `~/.truegate/`.
+ * It deliberately does NOT read anything from a dev project's directory:
+ * the dev's project tooling (Claude Code, Cursor, …) already surfaces its
+ * own CLAUDE.md / AGENTS.md / .cursor/rules to the model, and trueGate
+ * should not duplicate, override, or otherwise touch that surface.
  */
-export async function mergeContext(projectRoot: string): Promise<GovernanceFile[]> {
-  const results = await Promise.all([
-    loadClaudeContext(projectRoot),
-    loadAgentsContext(projectRoot),
-    loadCursorContext(projectRoot),
-    loadGlobalContext(),
-  ]);
-
-  return results.filter((r): r is GovernanceFile => r !== null);
+export async function mergeContext(): Promise<GovernanceFile[]> {
+  const global = await loadGlobalContext();
+  return global ? [global] : [];
 }

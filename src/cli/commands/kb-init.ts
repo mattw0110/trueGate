@@ -1,8 +1,7 @@
-import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { mkdir, writeFile, access } from 'node:fs/promises';
 import { KB_TEMPLATES } from '../kb-templates.js';
-import { TRUEGATE_DIR } from '../../config/constants.js';
+import { stateDir } from '../../config/paths.js';
 
 export interface KbInitOptions {
   force?: boolean;
@@ -18,9 +17,10 @@ async function fileExists(p: string): Promise<boolean> {
 }
 
 export async function runKbInit(options: KbInitOptions): Promise<void> {
-  // The knowledge base is operator-wide — it ALWAYS lives in ~/.truegate/.
-  // It is never installed into a project folder.
-  const target = join(homedir(), TRUEGATE_DIR);
+  // The knowledge base is operator-wide — it lives in trueGate's own state
+  // directory (`<repo>/.state/`). trueGate is self-contained; nothing is
+  // written outside the repo.
+  const target = stateDir();
   const files = Object.entries(KB_TEMPLATES).sort(([a], [b]) => a.localeCompare(b));
 
   console.log(`Scaffolding trueGate knowledge base into ${target}\n`);

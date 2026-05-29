@@ -9,7 +9,6 @@ import type {
 const config: TrueGateConfig = {
   port: 8457,
   logLevel: 'silent',
-  projectRoot: '/tmp',
   provider: 'openai',
 };
 

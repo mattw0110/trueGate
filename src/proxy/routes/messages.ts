@@ -14,6 +14,7 @@ import {
   resolveMarker,
   markerSuffix,
   formatMarker,
+  governanceNote,
 } from '../../validators/reporting/response-marker.js';
 import { pickUpstreamForModel } from '../../registry/route-model.js';
 import type { TrueGateConfig, UpstreamRegistry } from '../../types/runtime.js';
@@ -101,11 +102,14 @@ export function registerMessagesRoute(
     }
 
     const marker = formatMarker(baseMarker, endpoint.provider, response.model ?? requestedModel);
+    reply.header('x-truegate-upstream', `${endpoint.provider}/${response.model ?? requestedModel}`);
 
     if (!context) {
+      const note = governanceNote(marker, false, undefined);
+      const fullMarker = note ? `${marker}\n${note}` : marker;
       return reply.send({
         ...response,
-        content: appendMarkerToContent(response.content, marker),
+        content: appendMarkerToContent(response.content, fullMarker),
       });
     }
 
@@ -125,19 +129,23 @@ export function registerMessagesRoute(
 
     if (result.severity === 'warn') {
       const original = extractAnthropicText(response);
+      const warnNote = governanceNote(marker, true, 'warn');
+      const warnMarker = warnNote ? `${marker}\n${warnNote}` : marker;
       const warned: AnthropicNativeResponse = {
         ...response,
         content: appendMarkerToContent(
           [{ type: 'text', text: original + formatWarnings(result) } satisfies AnthropicTextBlock],
-          marker,
+          warnMarker,
         ),
       };
       return reply.send(warned);
     }
 
+    const note = governanceNote(marker, true, 'pass');
+    const fullMarker = note ? `${marker}\n${note}` : marker;
     return reply.send({
       ...response,
-      content: appendMarkerToContent(response.content, marker),
+      content: appendMarkerToContent(response.content, fullMarker),
     });
   });
 }

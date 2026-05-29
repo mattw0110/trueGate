@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { readUserConfig, resolveConfig } from '../../config/user-config.js';
+import { readUserConfig } from '../../config/user-config.js';
 import { loadGovernanceContext } from '../../proxy/middleware/governance-loader.js';
 import { validateResponse } from '../../validators/engine/validate-response.js';
 import {
@@ -16,8 +16,8 @@ export async function runValidate(filePath: string | undefined): Promise<void> {
     content = await readStdin();
   }
 
-  const config = resolveConfig(await readUserConfig());
-  const context = await loadGovernanceContext(config.projectRoot);
+  await readUserConfig();
+  const context = await loadGovernanceContext();
   const result = validateResponse(content, context.rules);
 
   if (result.severity === 'pass') {

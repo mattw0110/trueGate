@@ -15,7 +15,6 @@ let originalDispatcher: Dispatcher;
 const cfg = (): TrueGateConfig => ({
   port: 3458,
   logLevel: 'silent',
-  projectRoot: tmpDir,
   openAiApiKey: 'sk-test',
   provider: 'openai',
 });
@@ -83,10 +82,10 @@ describe('chat-completions: Claude Code XML → Agent Zero envelope', () => {
     };
 
     expect(envelope.tool_name).toBe('text_editor');
-    expect(envelope.tool_args.command).toBe('read');
+    expect(envelope.tool_args.action).toBe('read');
     expect(envelope.tool_args.path).toBe('/tmp/foo.py');
-    expect(envelope.tool_args.start).toBe(1);
-    expect(envelope.tool_args.end).toBe(150);
+    expect(envelope.tool_args.line_from).toBe(1);
+    expect(envelope.tool_args.line_to).toBe(150);
   });
 
   it('preserves model reasoning prose as thoughts[0]', async () => {
@@ -104,9 +103,9 @@ describe('chat-completions: Claude Code XML → Agent Zero envelope', () => {
   });
 
   it('coerces boolean and JSON parameter values (on a pass-through tool)', async () => {
-    // knowledge_tool is already an agent-zero name and passes through with args intact
+    // skills_tool is a current agent-zero tool name and passes through with args intact
     mockUpstream(
-      `<function_calls>\n<invoke name="knowledge_tool">\n<parameter name="question">foo</parameter>\n<parameter name="case_sensitive">true</parameter>\n<parameter name="filters">{"ext":"py"}</parameter>\n</invoke>\n</function_calls>`,
+      `<function_calls>\n<invoke name="skills_tool">\n<parameter name="action">search</parameter>\n<parameter name="query">foo</parameter>\n<parameter name="case_sensitive">true</parameter>\n<parameter name="filters">{"ext":"py"}</parameter>\n</invoke>\n</function_calls>`,
     );
 
     const server = buildServer(cfg());
@@ -132,9 +131,10 @@ describe('chat-completions: Claude Code XML → Agent Zero envelope', () => {
     ) as { tool_name: string; tool_args: Record<string, unknown> };
 
     expect(envelope.tool_name).toBe('text_editor');
-    expect(envelope.tool_args.command).toBe('view');
+    expect(envelope.tool_args.action).toBe('read');
     expect(envelope.tool_args.path).toBe('/tmp/foo.py');
-    expect(envelope.tool_args.view_range).toEqual([1, 51]);
+    expect(envelope.tool_args.line_from).toBe(1);
+    expect(envelope.tool_args.line_to).toBe(50);
   });
 
   it('maps Claude Code Bash to agent-zero code_execution_tool terminal', async () => {
@@ -167,10 +167,10 @@ describe('chat-completions: Claude Code XML → Agent Zero envelope', () => {
     ) as { tool_name: string; tool_args: Record<string, unknown> };
 
     expect(envelope.tool_name).toBe('text_editor');
-    expect(envelope.tool_args.command).toBe('str_replace');
+    expect(envelope.tool_args.action).toBe('patch');
     expect(envelope.tool_args.path).toBe('/tmp/x.py');
-    expect(envelope.tool_args.old_str).toBe('foo');
-    expect(envelope.tool_args.new_str).toBe('bar');
+    expect(envelope.tool_args.patch_text).toContain('-foo');
+    expect(envelope.tool_args.patch_text).toContain('+bar');
   });
 
   it('passes unknown tool names through unchanged', async () => {

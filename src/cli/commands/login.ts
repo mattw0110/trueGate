@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { readUserConfig, writeUserConfig } from '../../config/user-config.js';
+import { vendorDir } from '../../config/paths.js';
 
 type ProviderKey = 'claude' | 'codex' | 'gemini' | 'grok' | 'github' | 'cursor';
 
@@ -28,14 +31,24 @@ async function runCommand(cmd: string, args: string[]): Promise<number> {
   });
 }
 
+async function findCliProxyBin(): Promise<string | null> {
+  // Prefer the bundled binary under <repo>/vendor/cliproxy/cli-proxy-api.
+  const bundled = join(vendorDir(), 'cliproxy', 'cli-proxy-api');
+  if (existsSync(bundled)) return bundled;
+  // Fall back to whatever is on PATH so an operator with a system-wide
+  // install isn't blocked while the vendor bootstrap is in progress.
+  return (await which('cli-proxy-api')) ?? (await which('cliproxy')) ?? null;
+}
+
 async function loginViaCliProxy(flag: string, providerLabel: string): Promise<LoginResult> {
-  const bin = (await which('cli-proxy-api')) ?? (await which('cliproxy')) ?? null;
+  const bin = await findCliProxyBin();
   if (!bin) {
     return {
       ok: false,
       note:
-        `CLIProxyAPI is the recommended way to log in to ${providerLabel}.\n` +
-        `Install it from https://help.router-for.me, then re-run:\n` +
+        `CLIProxyAPI binary not found.\n` +
+        `Run scripts/bootstrap-cliproxy.sh to download a copy into <repo>/vendor/,\n` +
+        `or install it system-wide and ensure it's on PATH, then re-run:\n` +
         `  truegate login ${providerLabel.toLowerCase()}`,
     };
   }

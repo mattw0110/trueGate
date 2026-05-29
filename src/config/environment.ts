@@ -19,13 +19,11 @@ function parseProvider(raw: string | undefined): ProviderName {
 export function loadConfig(): TrueGateConfig {
   const port = parseInt(process.env['TRUEGATE_PORT'] ?? String(DEFAULT_PORT), 10);
   const logLevel = process.env['TRUEGATE_LOG_LEVEL'] ?? DEFAULT_LOG_LEVEL;
-  const projectRoot = process.env['TRUEGATE_PROJECT_ROOT'] ?? process.cwd();
   const provider = parseProvider(process.env['TRUEGATE_PROVIDER']);
 
   const config: TrueGateConfig = {
     port: isNaN(port) ? DEFAULT_PORT : port,
     logLevel,
-    projectRoot,
     provider,
   };
 

@@ -7,7 +7,6 @@ export interface ServeFlags {
   provider?: string;
   port?: string;
   logLevel?: string;
-  projectRoot?: string;
   upstreamUrl?: string;
   token?: string;
   openaiKey?: string;
@@ -44,7 +43,6 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   }
   if (flags.port) overrides.port = parseInt(flags.port, 10);
   if (flags.logLevel) overrides.logLevel = flags.logLevel;
-  if (flags.projectRoot) overrides.projectRoot = flags.projectRoot;
   if (flags.upstreamUrl) overrides.upstreamUrl = flags.upstreamUrl;
   if (flags.openaiKey) overrides.openAiApiKey = flags.openaiKey;
   if (flags.anthropicKey) overrides.anthropicApiKey = flags.anthropicKey;
@@ -77,7 +75,7 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`trueGate proxy listening on http://localhost:${config.port}`);
-    console.log(`  → project root: ${config.projectRoot}`);
+    console.log(`  → governance: ~/.truegate/ (operator-wide, global CLI)`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);

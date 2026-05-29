@@ -15,6 +15,7 @@ import {
   markerSuffix,
   appendMarker,
   formatMarker,
+  governanceNote,
 } from '../../validators/reporting/response-marker.js';
 import { pickUpstreamForModel } from '../../registry/route-model.js';
 import type { TrueGateConfig, UpstreamRegistry } from '../../types/runtime.js';
@@ -66,6 +67,7 @@ export function registerResponsesRoute(
     const base = endpoint.baseUrl.replace(/\/$/, '').replace(/\/v1$/, '');
     const url = `${base}/v1/responses`;
     const marker = formatMarker(baseMarker, endpoint.provider, requestedModel);
+    reply.header('x-truegate-upstream', `${endpoint.provider}/${requestedModel}`);
     const context = request.governanceContext;
     let body = request.body;
 
@@ -116,8 +118,11 @@ export function registerResponsesRoute(
       });
     }
 
+    const note = governanceNote(marker, !!context, context ? 'pass' : undefined);
+    const fullMarker = note ? `${marker}\n${note}` : marker;
+
     if (!context) {
-      return reply.send(applyMarkerToResponse(upstreamResponse, marker));
+      return reply.send(applyMarkerToResponse(upstreamResponse, fullMarker));
     }
 
     const result = validateResponsesResponse(upstreamResponse, context.rules);
@@ -133,8 +138,10 @@ export function registerResponsesRoute(
     }
 
     if (result.severity === 'warn') {
+      const warnNote = governanceNote(marker, true, 'warn');
+      const warnMarker = warnNote ? `${marker}\n${warnNote}` : marker;
       const original = extractResponsesText(upstreamResponse);
-      const warnedText = appendMarker(original + formatWarnings(result), marker);
+      const warnedText = appendMarker(original + formatWarnings(result), warnMarker);
       const warnedOutput: ResponsesOutputItem = {
         type: 'message',
         role: 'assistant',
@@ -143,6 +150,6 @@ export function registerResponsesRoute(
       return reply.send({ ...upstreamResponse, output: [warnedOutput], output_text: warnedText });
     }
 
-    return reply.send(applyMarkerToResponse(upstreamResponse, marker));
+    return reply.send(applyMarkerToResponse(upstreamResponse, fullMarker));
   });
 }

@@ -2,215 +2,141 @@
 
 trueGate enforces governance at two layers:
 
-1. **`governance.md`** — free-form prose, injected as a system message. Shapes how the LLM behaves.
+1. **`governance.md`** — free-form prose, injected as a system message into every request.
 2. **`rules.yaml`** — machine-readable patterns. trueGate validates every response and can `warn` or `block`.
 
-Together, they form **prompt-time guidance + output-time enforcement**.
+Together: **prompt-time guidance + output-time enforcement**.
 
 ---
 
 ## File locations
 
-| Path                            | Scope             | Purpose                                                               |
-| ------------------------------- | ----------------- | --------------------------------------------------------------------- |
-| **`~/.truegate/governance.md`** | **Operator-wide** | **Applies to every project. Set by you, not editable per-project.**   |
-| **`~/.truegate/rules.yaml`**    | **Operator-wide** | **Always-on enforcement. Layered ABOVE project rules — unremovable.** |
-| `.truegate/governance.md`       | Per-project       | Primary governance prose for one repo                                 |
-| `.truegate/rules.yaml`          | Per-project       | Machine-enforced rules for one repo                                   |
-| `CLAUDE.md`                     | Per-project       | Auto-loaded — same prose as Claude Code reads                         |
-| `AGENTS.md`                     | Per-project       | Auto-loaded — for non-Claude agents                                   |
-| `.cursor/rules/*.mdc`           | Per-project       | Auto-loaded — Cursor rule files (concatenated alphabetically)         |
+trueGate is self-contained. Governance files live inside the repo — nothing is read from your dev project directories.
 
-trueGate compiles all of these into one system message at request time. Cache TTL: **5 seconds** — edit a file, the next request picks it up.
+| Path | Role | Tracked? |
+| --- | --- | --- |
+| `data/governance.md` | Shipped defaults — applied immediately, no setup required | ✓ Yes |
+| `data/rules.yaml` | Shipped default rules | ✓ Yes |
+| `.state/governance.md` | Operator override — replaces `data/governance.md` when present | ✗ Gitignored |
+| `.state/rules.yaml` | Operator override — replaces `data/rules.yaml` when present | ✗ Gitignored |
 
-Priority order (highest authority first): `global` > `truegate` > `claude` > `cursor` > `agents`.
+**Resolution order per file:** `.state/` wins if present; otherwise `data/` is used. This lets you override one file without copying both.
 
-### "I want central control across every project I work in"
+The proxy caches compiled governance for **5 seconds**. Edit a file and the next request picks it up without restarting.
 
-Run once on your machine:
+---
+
+## Scaffolding your own governance
+
+The shipped `data/` defaults are a reasonable starting point. To customize:
 
 ```bash
+# Minimal scaffold — writes .state/governance.md + .state/rules.yaml
 truegate global-init
+
+# Full operator knowledge base — writes .state/ with topics/, components/, patterns/, references/
+truegate kb-init
 ```
 
-That writes `~/.truegate/governance.md` and `~/.truegate/rules.yaml` with starter operator-wide content. Rules there fire on every request regardless of which project root trueGate is serving. Per-project files can **add** rules but cannot subtract operator-wide ones — `block`-severity entries in the global rules.yaml are effectively unremovable safety floors.
-
-To verify the layering: `truegate inspect` shows both global and project sources separately.
-
----
-
-## `.truegate/governance.md`
-
-Free-form Markdown. trueGate doesn't parse it — it injects it into the system message verbatim. Examples of useful sections:
-
-```markdown
-# Project Governance
-
-## Tech Stack
-
-- TypeScript (strict mode)
-- React 18 (no class components)
-- Tailwind CSS — no inline styles
-
-## Architecture
-
-- All data fetching through `src/lib/api.ts`
-- Components stay UI-only — no business logic
-- Server actions live in `src/server/actions/`
-
-## Forbidden
-
-- Do not introduce new `any` types
-- Do not add jQuery or moment.js
-- Do not call third-party APIs from client code
-
-## Style
-
-- Names: kebab-case for files, camelCase for vars, PascalCase for components
-- Tests live next to the file: `foo.ts` + `foo.test.ts`
-- One default export per file
-```
-
-The LLM sees this on every request. It biases generation toward your conventions before any code is generated.
-
----
-
-## `.truegate/rules.yaml`
-
-Machine-readable enforcement layer. trueGate inspects every response and applies these rules.
-
-```yaml
-version: '1'
-
-# Reject npm packages by name. Severity: warn (default).
-forbiddenDependencies:
-  - moment
-  - lodash
-  - request
-
-# Reject framework names in suggestions. Severity: warn.
-forbiddenFrameworks:
-  - Angular
-  - Vue 2
-
-# Custom regex patterns. Each entry is either a bare string or an object.
-# trueGate also enforces a built-in block list (rm -rf /, curl|sh, sk-*, DROP TABLE, etc.)
-dangerousPatterns:
-  - pattern: "process\\.env\\.\\w*SECRET"
-    severity: block
-    message: 'Do not log or echo environment secrets'
-  - pattern: "eval\\("
-    severity: block
-    message: 'eval() is forbidden'
-  - 'TODO: remove before deploy' # bare string = warn
-
-typescriptRules:
-  noAny: true # warn on `: any`
-  requireStrict: true # warn when tsconfig is suggested without "strict": true
-```
-
-### Severity
-
-| Severity | Effect                                                                                            |
-| -------- | ------------------------------------------------------------------------------------------------- |
-| `pass`   | No action                                                                                         |
-| `warn`   | Response is delivered, but a `⚠ Governance Warning` block is appended                             |
-| `block`  | Response content is **replaced** with a `🚫 Governance Block` refusal explaining which rule fired |
-
-`block` always wins. If any rule blocks, the entire response is replaced.
-
----
-
-## Built-in dangerous patterns
-
-These fire as `block` regardless of your `rules.yaml`:
-
-- `rm -rf /` and `rm -rf ~/`
-- `curl ... | sh` / `curl ... | bash` and the `wget` variants
-- `sk-[a-zA-Z0-9]{20,}` — leaked OpenAI keys
-- `sk-ant-[...]` — leaked Anthropic keys
-- `DROP TABLE` (case-insensitive)
-- `format c:\ /y`
-- `mkfs.{ext4,xfs,...} /dev/sda` etc.
-
-You can add to this list via `rules.yaml > dangerousPatterns`. You **cannot** disable the built-ins (and shouldn't — they're the safety floor).
-
----
-
-## Practical patterns
-
-### Block a specific banned identifier
-
-```yaml
-dangerousPatterns:
-  - pattern: "\\bsendDataToLegacyBackend\\b"
-    severity: block
-    message: 'Legacy endpoint deprecated — use sendDataToV2'
-```
-
-### Warn on `console.log` in committed code
-
-```yaml
-dangerousPatterns:
-  - pattern: "console\\.log\\("
-    severity: warn
-    message: 'Strip console.log before committing'
-```
-
-### Warn on `// @ts-ignore`
-
-```yaml
-dangerousPatterns:
-  - pattern: '@ts-ignore'
-    severity: warn
-    message: '@ts-ignore hides bugs — fix the type instead'
-```
-
-### Block known-exposed model output (e.g. internal endpoint leaking)
-
-```yaml
-dangerousPatterns:
-  - pattern: "internal-api\\.acme\\.corp"
-    severity: block
-    message: 'Internal API host should never appear in committed code'
-```
-
----
-
-## Verifying what's loaded
+Verify what's currently loaded:
 
 ```bash
 truegate inspect
 ```
 
-Shows:
+---
 
-- which governance sources were loaded
-- compiled rule counts
-- first 500 chars of the system message that will be injected
+## `governance.md`
 
-Use this when a request behaves unexpectedly — usually a file isn't where you thought, or YAML didn't parse.
+Free-form Markdown. trueGate injects it verbatim as a system message. The LLM sees it on every request and biases generation accordingly.
+
+```markdown
+# Operator Governance
+
+## Always
+
+- Never generate destructive shell commands (rm -rf, DROP TABLE, etc.)
+- Never embed credentials, API keys, or private hostnames in code.
+- Treat all user input as untrusted.
+
+## Style
+
+- TypeScript strict mode; no `any`.
+- Prefer explicit error handling at module boundaries only.
+- No jQuery, moment.js, or other forbidden dependencies.
+
+## Architecture
+
+- All data fetching through `src/lib/api.ts`.
+- Components stay UI-only — no business logic in JSX.
+```
+
+**Tips:**
+
+- Use `##` sections — they're easier for the model to scan.
+- Lead with hard constraints, follow with style preferences.
+- Shorter is more reliable. Long files dilute each rule's weight.
 
 ---
 
-## Testing a file or response against your rules
+## `rules.yaml`
 
-```bash
-truegate validate path/to/code.ts        # check a file
-cat response.json | truegate validate    # check piped content
+Machine-readable enforcement. trueGate parses every LLM response and applies these patterns — the model doesn't need to understand them.
+
+```yaml
+version: '1'
+
+forbiddenDependencies:
+  - moment
+  - request
+  - lodash
+
+forbiddenFrameworks:
+  - jQuery
+  - AngularJS
+
+dangerousPatterns:
+  # Block exact pattern
+  - pattern: 'rm -rf /'
+    severity: block
+    message: 'Destructive rm command'
+
+  # Block with regex (Go RE2 syntax)
+  - pattern: "process\\.env\\.\\w*SECRET"
+    severity: block
+    message: 'Do not log or echo environment secrets'
+
+  # Warn instead of block
+  - pattern: 'TODO: fix this'
+    severity: warn
+    message: 'Unresolved TODO left in generated code'
+
+typescriptRules:
+  noAny: true
+  requireStrict: true
 ```
 
-Exit code is non-zero on `block`, zero on `warn` or `pass`. Use in CI:
+### Severity levels
 
-```bash
-truegate validate dist/ && deploy
-```
+| Severity | Effect |
+| --- | --- |
+| `block` | Response replaced with a governance refusal. Client gets a 200 with the block notice. |
+| `warn` | Warning block appended to the response. Request still delivered. |
+
+### Built-in patterns (always active)
+
+These fire regardless of what's in `rules.yaml`:
+
+- `rm -rf /` and `rm -rf ~` — destructive filesystem wipe
+- `curl ... | sh` and `wget ... | sh` — pipe-to-shell installers
+- `sk-...` OpenAI key patterns in response text — leaked keys
+- `DROP TABLE` — destructive DDL
+- TLS certificate verification bypass (`verify=False`, `rejectUnauthorized: false`)
 
 ---
 
-## Anti-patterns to avoid
+## What trueGate does NOT govern
 
-- **Don't put credentials in `governance.md`.** It's injected into every prompt — anything in it goes to the LLM provider.
-- **Don't write rules that block the desired output.** If your rule fires on legitimate code, you'll get blank responses constantly. Test with `truegate validate` first.
-- **Don't make `rules.yaml` huge.** It runs on every response. ~50 patterns is fine; ~5000 will hurt latency.
-- **Don't duplicate Claude Code's built-in instructions** in `governance.md` if you already have a good `CLAUDE.md`. trueGate auto-loads both.
+- **Your dev project's own files** — trueGate does not read `CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, or any other file from the project the developer is working in. Those are surfaced to the model by the IDE/agent directly. trueGate adds only its operator-wide layer on top.
+- **Upstream model choice** — trueGate routes by model name but doesn't rewrite the model field.
+- **Streaming content mid-stream** — `stream: false` is forced upstream; governance runs on the complete response.

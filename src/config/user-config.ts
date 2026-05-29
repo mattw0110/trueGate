@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 import { z } from 'zod';
 import type { ProviderName, TrueGateConfig, TrueGateMode } from '../types/runtime.js';
 import { DEFAULT_LOG_LEVEL, DEFAULT_PORT } from './constants.js';
+import { stateDir } from './paths.js';
 
 const PROVIDER_NAMES: [ProviderName, ...ProviderName[]] = [
   'openai',
@@ -20,7 +20,6 @@ export const UserConfigSchema = z
     provider: z.enum(PROVIDER_NAMES).optional(),
     port: z.number().int().positive().optional(),
     logLevel: z.string().optional(),
-    projectRoot: z.string().optional(),
     openAiApiKey: z.string().optional(),
     anthropicApiKey: z.string().optional(),
     githubToken: z.string().optional(),
@@ -37,7 +36,7 @@ export const UserConfigSchema = z
 export type UserConfig = z.infer<typeof UserConfigSchema>;
 
 export function userConfigPath(): string {
-  return join(homedir(), '.truegate', 'config.json');
+  return join(stateDir(), 'config.json');
 }
 
 export async function readUserConfig(): Promise<UserConfig> {
@@ -68,7 +67,6 @@ export interface ConfigOverrides {
   provider?: ProviderName;
   port?: number;
   logLevel?: string;
-  projectRoot?: string;
   openAiApiKey?: string;
   anthropicApiKey?: string;
   githubToken?: string;
@@ -110,12 +108,6 @@ export function resolveConfig(
   const logLevel =
     overrides.logLevel ?? env['TRUEGATE_LOG_LEVEL'] ?? userConfig.logLevel ?? DEFAULT_LOG_LEVEL;
 
-  const projectRoot =
-    overrides.projectRoot ??
-    env['TRUEGATE_PROJECT_ROOT'] ??
-    userConfig.projectRoot ??
-    process.cwd();
-
   const openAiApiKey = overrides.openAiApiKey ?? env['OPENAI_API_KEY'] ?? userConfig.openAiApiKey;
   const anthropicApiKey =
     overrides.anthropicApiKey ?? env['ANTHROPIC_API_KEY'] ?? userConfig.anthropicApiKey;
@@ -142,7 +134,6 @@ export function resolveConfig(
   const config: TrueGateConfig = {
     port: isNaN(port) ? DEFAULT_PORT : port,
     logLevel,
-    projectRoot,
     provider,
   };
   if (providerForced) config.providerForced = true;

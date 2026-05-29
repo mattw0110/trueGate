@@ -15,7 +15,6 @@ let originalDispatcher: Dispatcher;
 const cfg = (): TrueGateConfig => ({
   port: 3458,
   logLevel: 'silent',
-  projectRoot: tmpDir,
   openAiApiKey: 'sk-test',
   provider: 'openai',
 });
@@ -87,7 +86,7 @@ describe('chat-completions: model returns Agent Zero envelope natively', () => {
     // It must still parse as JSON
     const parsed = JSON.parse(contentStr) as { tool_args: { text: string } };
     expect(parsed.tool_args.text).toContain('Hi there!');
-    expect(parsed.tool_args.text).toMatch(/— trueGate( · \S+\/\S+)?\s*$/);
+    expect(parsed.tool_args.text).toMatch(/— trueGate( · \S+\/\S+)?(\nGovernance: .+)?\s*$/);
   });
 
   it('does NOT inject `text` into non-response tool envelopes (would break agent-zero dispatch)', async () => {

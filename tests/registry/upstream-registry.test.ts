@@ -9,7 +9,6 @@ let original: Dispatcher;
 const baseConfig: TrueGateConfig = {
   port: 8457,
   logLevel: 'silent',
-  projectRoot: '/tmp',
   provider: 'openai',
 };
 

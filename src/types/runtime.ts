@@ -12,7 +12,6 @@ export type TrueGateMode = 'auto' | 'locked';
 export interface TrueGateConfig {
   port: number;
   logLevel: string;
-  projectRoot: string;
   /**
    * Locked-mode provider OR the default provider used to construct the
    * registry's locked fallback when --no-auto / mode='locked'. In auto mode

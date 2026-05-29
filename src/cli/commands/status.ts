@@ -15,7 +15,7 @@ export async function runStatus(): Promise<void> {
   console.log(`mode:        ${config.mode ?? (config.providerForced ? 'locked' : 'auto')}`);
   console.log(`provider:    ${config.provider}${config.providerForced ? ' (forced)' : ''}`);
   console.log(`port:        ${config.port}`);
-  console.log(`projectRoot: ${config.projectRoot}`);
+  console.log(`governance:  bundled defaults (data/) + operator overrides (.state/)`);
   console.log();
 
   // proxy itself

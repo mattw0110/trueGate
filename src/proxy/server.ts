@@ -31,7 +31,7 @@ export function buildServer(config: TrueGateConfig, registry?: UpstreamRegistry)
   // routing has something to work with.
   const resolved = registry ?? buildLockedRegistrySync(config);
 
-  fastify.addHook('onRequest', makeGovernanceLoaderHook(config.projectRoot));
+  fastify.addHook('onRequest', makeGovernanceLoaderHook());
   fastify.addHook('preHandler', requestCompilerHook);
 
   registerChatCompletionsRoute(fastify, config, resolved);

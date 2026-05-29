@@ -65,7 +65,7 @@ export async function runSetup(): Promise<void> {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(' trueGate — interactive setup');
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('Saves to ~/.truegate/config.json (file is chmod 0600).');
+  console.log('Saves to <repo>/.state/config.json (file is chmod 0600).');
   console.log();
 
   const existing = await readUserConfig();

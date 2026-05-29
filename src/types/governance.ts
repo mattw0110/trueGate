@@ -1,8 +1,9 @@
-export type ContextSource = 'claude' | 'agents' | 'cursor' | 'global';
+export type ContextSource = 'global';
 
 export interface GovernanceFile {
   source: ContextSource;
-  projectRoot: string;
+  /** Absolute filesystem path the file was loaded from (e.g. ~/.truegate). */
+  sourcePath: string;
   content: string;
   frontMatter?: Record<string, unknown>;
 }

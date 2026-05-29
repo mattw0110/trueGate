@@ -1,0 +1,111 @@
+version: "1"
+
+# Operator-wide enforcement rules (matt@patientize.com).
+# These apply on TOP of every project's rules — they cannot be disabled
+# by a project's local .truegate/rules.yaml. block-severity entries here
+# are effectively unremovable safety floors.
+
+# Packages I never want in any project.
+forbiddenDependencies:
+  - moment # date-fns / Temporal instead
+  - request # deprecated; use fetch / undici / axios
+  - node-uuid # use crypto.randomUUID() or `uuid`
+  - bower # deprecated package manager
+  - left-pad # use String.prototype.padStart
+  - colors # supply-chain risk history; use chalk
+  - faker # use @faker-js/faker (the maintained fork)
+
+# Frameworks I never want suggested for new code.
+forbiddenFrameworks:
+  - jQuery
+  - Backbone
+  - Knockout
+  - AngularJS # the pre-2.x version specifically
+  - Bower
+
+# Pattern-based enforcement. Built-ins (rm -rf /, curl|sh, sk-* leaks,
+# DROP TABLE, mkfs, format c:) are ALREADY active and don't need
+# to be re-listed here.
+dangerousPatterns:
+  # ─── Credentials & secrets ─────────────────────────────────────────────
+  - pattern: "process\\.env\\.\\w*SECRET"
+    severity: block
+    message: "Do not interpolate environment secrets into emitted code"
+  - pattern: "process\\.env\\.\\w*PASSWORD"
+    severity: block
+    message: "Do not embed env-loaded passwords in code"
+  - pattern: "console\\.log\\([^)]*api[_-]?key"
+    severity: block
+    message: "Do not log API keys to console"
+  - pattern: "console\\.log\\([^)]*token"
+    severity: warn
+    message: "Possible token in console.log — confirm this is not a credential"
+  - pattern: "(?i)bearer\\s+[A-Za-z0-9._\\-]{20,}"
+    severity: block
+    message: "Hardcoded Bearer token detected"
+  - pattern: "AKIA[0-9A-Z]{16}"
+    severity: block
+    message: "AWS access key detected in code"
+  - pattern: "ghp_[A-Za-z0-9]{30,}"
+    severity: block
+    message: "GitHub personal access token detected"
+  - pattern: "xox[abposr]-[A-Za-z0-9-]{10,}"
+    severity: block
+    message: "Slack token detected"
+
+  # ─── TLS / safety bypasses ─────────────────────────────────────────────
+  - pattern: "rejectUnauthorized:\\s*false"
+    severity: block
+    message: "Disabling TLS cert verification is not allowed"
+  - pattern: "verify\\s*=\\s*False"
+    severity: block
+    message: "Disabling TLS cert verification in Python requests is not allowed"
+  - pattern: "InsecureRequestWarning"
+    severity: warn
+    message: "Suppressing insecure-request warnings usually means a hidden TLS bypass"
+  - pattern: "NODE_TLS_REJECT_UNAUTHORIZED\\s*=\\s*['\"]?0"
+    severity: block
+    message: "Globally disabling Node TLS verification is forbidden"
+
+  # ─── Code-execution sinks ──────────────────────────────────────────────
+  - pattern: "\\beval\\s*\\("
+    severity: block
+    message: "eval() is forbidden"
+  - pattern: "new\\s+Function\\s*\\("
+    severity: block
+    message: "Function() constructor is forbidden — same risk as eval"
+  - pattern: "exec\\(\\s*['\"`].*\\$\\{"
+    severity: warn
+    message: "String-templated exec() is a shell-injection risk"
+  - pattern: "subprocess\\.(call|run|Popen)\\([^)]*shell\\s*=\\s*True"
+    severity: warn
+    message: "subprocess shell=True is a shell-injection risk; pass args as a list"
+
+  # ─── Suppression that masks real problems ──────────────────────────────
+  - pattern: "@ts-ignore"
+    severity: warn
+    message: "@ts-ignore hides bugs — fix the underlying type"
+  - pattern: "// eslint-disable-next-line"
+    severity: warn
+    message: "Avoid disabling lint; fix the rule violation"
+  - pattern: "// @ts-nocheck"
+    severity: warn
+    message: "@ts-nocheck disables type safety for the whole file"
+  - pattern: "# noqa\\b"
+    severity: warn
+    message: "Avoid noqa; fix the lint issue"
+
+  # ─── Debugging leftovers ───────────────────────────────────────────────
+  - pattern: "console\\.log\\("
+    severity: warn
+    message: "console.log left in code — use a real logger or remove before commit"
+  - pattern: "debugger;"
+    severity: block
+    message: "debugger statement must not be committed"
+  - pattern: "TODO\\(unowned\\)"
+    severity: warn
+    message: "Unowned TODO — assign or remove"
+
+typescriptRules:
+  noAny: true
+  requireStrict: true

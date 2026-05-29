@@ -13,7 +13,7 @@ const program = new Command();
 
 program
   .name('truegate')
-  .description('Local-first middleware proxy for AI coding tools with project governance')
+  .description('Local-first middleware proxy for AI coding tools with operator-wide governance')
   .version('0.1.0');
 
 program
@@ -61,7 +61,6 @@ program
   )
   .option('-p, --port <port>', `Port to listen on`)
   .option('--log-level <level>', 'silent | error | warn | info | debug | trace')
-  .option('--project-root <path>', 'Project root used to discover governance files')
   .option('--upstream-url <url>', 'Upstream provider base URL (for custom / overrides)')
   .option('--token <value>', 'API token for the selected provider (forwarded to upstream)')
   .option('--openai-key <key>', 'OPENAI_API_KEY (overrides env)')
@@ -87,10 +86,9 @@ program
 
 program
   .command('inspect')
-  .description('Print resolved governance context for the current project')
-  .option('--project <path>', 'Project root to inspect')
-  .action(async (options: { project?: string }) => {
-    await runInspect(options);
+  .description('Print the operator-wide governance context loaded from ~/.truegate/')
+  .action(async () => {
+    await runInspect();
   });
 
 program

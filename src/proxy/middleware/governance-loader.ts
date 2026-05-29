@@ -9,27 +9,23 @@ interface CacheEntry {
   expiresAt: number;
 }
 
-const cache = new Map<string, CacheEntry>();
+let cached: CacheEntry | null = null;
 
-export async function loadGovernanceContext(projectRoot: string): Promise<CompiledContext> {
+export async function loadGovernanceContext(): Promise<CompiledContext> {
   const now = Date.now();
-  const cached = cache.get(projectRoot);
-  if (cached && cached.expiresAt > now) {
-    return cached.context;
-  }
+  if (cached && cached.expiresAt > now) return cached.context;
 
-  const files = await mergeContext(projectRoot);
+  const files = await mergeContext();
   const context = buildRuntimeContext(files);
-
-  cache.set(projectRoot, { context, expiresAt: now + GOVERNANCE_CACHE_TTL_MS });
+  cached = { context, expiresAt: now + GOVERNANCE_CACHE_TTL_MS };
   return context;
 }
 
-export function makeGovernanceLoaderHook(projectRoot: string) {
+export function makeGovernanceLoaderHook() {
   return async function governanceLoaderHook(
     request: FastifyRequest,
     _reply: FastifyReply,
   ): Promise<void> {
-    request.governanceContext = await loadGovernanceContext(projectRoot);
+    request.governanceContext = await loadGovernanceContext();
   };
 }

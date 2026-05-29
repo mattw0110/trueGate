@@ -148,6 +148,28 @@ describe('canonicalize — new mappings', () => {
     expect(c.name).toBe('weird_custom_tool');
     expect(c.args.x).toBe(1);
   });
+
+  it('splits dotted dispatch shape "text_editor.read" into name + action', () => {
+    const c = canonicalize('text_editor.read', { path: '/tmp/foo', line_from: 1, line_to: 50 });
+    expect(c.name).toBe('text_editor');
+    expect(c.args.action).toBe('read');
+    expect(c.args.path).toBe('/tmp/foo');
+    expect(c.originalName).toBe('text_editor.read');
+  });
+
+  it('splits dotted dispatch shape "code_execution_tool.terminal"', () => {
+    const c = canonicalize('code_execution_tool.terminal', { code: 'ls' });
+    expect(c.name).toBe('code_execution_tool');
+    expect(c.args.action).toBe('terminal');
+    expect(c.args.code).toBe('ls');
+  });
+
+  it('does not split dotted names when args already supply action', () => {
+    const c = canonicalize('text_editor.read', { action: 'write', path: '/tmp/foo', content: 'x' });
+    // existing action wins; dotted suffix is ignored rather than overwriting.
+    expect(c.name).toBe('text_editor');
+    expect(c.args.action).toBe('write');
+  });
 });
 
 describe('stripFences', () => {
@@ -287,6 +309,72 @@ describe('translateResponseToConvention', () => {
     expect(String(env.tool_args.text)).toContain('not currently advertised');
   });
 
+  it('agent-zero client + envelope with trailing chars → parses, no double-wrap', () => {
+    // Reproduces the production "weird response" bug: upstream emitted a
+    // valid envelope but with a stray trailing newline/whitespace that broke
+    // strict JSON.parse, causing trueGate to wrap the entire envelope as a
+    // STRING inside tool_args.text — the user saw escaped JSON.
+    const inner = JSON.stringify({
+      thoughts: ['t'],
+      headline: 'h',
+      tool_name: 'response',
+      tool_args: { text: '## Yes — There Is Redundant Code\n\nLong markdown body.' },
+    });
+    const content = inner + '\n\n'; // trailing whitespace post-envelope
+    const r = translateResponseToConvention(res({ role: 'assistant', content }), 'agent-zero');
+    const outer = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { text: string };
+    };
+    expect(outer.tool_name).toBe('response');
+    // The text should be the markdown body, NOT a stringified envelope.
+    expect(outer.tool_args.text).toContain('## Yes');
+    expect(outer.tool_args.text).not.toMatch(/\\"tool_name\\"/);
+    expect(outer.tool_args.text).not.toMatch(/^\{"thoughts"/);
+  });
+
+  it('agent-zero client + envelope-shaped content that fails strict parse → forwards verbatim, no double-wrap', () => {
+    // Pathological case: an envelope-shaped string with a JSON-illegal byte
+    // (e.g. raw newline inside a string literal). The shape-detector
+    // short-circuits the wrap path so the operator sees the original content
+    // instead of escaped-JSON.
+    const malformed =
+      '{"thoughts":["t"],"headline":"h","tool_name":"response","tool_args":{"text":"line1\nline2"}}';
+    const r = translateResponseToConvention(
+      res({ role: 'assistant', content: malformed }),
+      'agent-zero',
+    );
+    expect(r.choices[0]!.message.content).toBe(malformed);
+  });
+});
+
+describe('parseAgentZeroEnvelope (parser robustness)', () => {
+  it('accepts an envelope with leading prose', () => {
+    const env = JSON.stringify({
+      thoughts: [],
+      headline: 'h',
+      tool_name: 'response',
+      tool_args: { text: 'hi' },
+    });
+    const r = parseAgentZeroEnvelope(`Sure, here you go:\n${env}`);
+    expect(r?.name).toBe('response');
+    expect(r?.args.text).toBe('hi');
+  });
+
+  it('accepts an envelope with trailing prose', () => {
+    const env = JSON.stringify({
+      thoughts: [],
+      headline: 'h',
+      tool_name: 'response',
+      tool_args: { text: 'hi' },
+    });
+    const r = parseAgentZeroEnvelope(`${env}\n\nTrailing note.`);
+    expect(r?.name).toBe('response');
+    expect(r?.args.text).toBe('hi');
+  });
+});
+
+describe('translateResponseToConvention — openai-tools and anthropic-tools', () => {
   it('openai-tools client + upstream XML → emits tool_calls', () => {
     const r = translateResponseToConvention(
       res({

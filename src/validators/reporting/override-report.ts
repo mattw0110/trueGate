@@ -1,10 +1,7 @@
 import type { CompiledContext, ContextSource } from '../../types/governance.js';
 
 const SOURCE_LABELS: Record<ContextSource, string> = {
-  claude: 'CLAUDE.md (project)',
-  agents: 'AGENTS.md (project)',
-  cursor: '.cursor/rules/ (project)',
-  global: '~/.truegate/governance.md (operator-wide, defers to project)',
+  global: 'trueGate governance bundle (data/ + .state/ overrides)',
 };
 
 export function formatOverrideReport(context: CompiledContext): string {

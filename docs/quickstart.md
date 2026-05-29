@@ -1,195 +1,171 @@
 # Quickstart
 
-Get trueGate running and your IDE talking to it in **3 minutes**.
+Get trueGate running in **3 minutes**.
 
 ```
 ┌─────────────┐  request   ┌─────────────┐  request   ┌────────────────┐
 │  Your IDE   │ ─────────▶ │  trueGate   │ ─────────▶ │  LLM Provider  │
 │  (Claude    │            │  :8457      │            │  (Anthropic /  │
 │   Code,     │ ◀───────── │  governance │ ◀───────── │   OpenAI /     │
-│   Cursor…)  │  response  │  enforced   │  response  │   Ollama /     │
-└─────────────┘            └─────────────┘            │   CLIProxyAPI) │
-                                                      └────────────────┘
+│   Cursor…)  │  response  │  validated  │  response  │   Ollama / …)  │
+└─────────────┘            └─────────────┘            └────────────────┘
 ```
+
+
+---
 
 ## 1. Install
 
+Clone the repo anywhere you want trueGate to live permanently:
+
 ```bash
-git clone <repo> trueGate && cd trueGate
+git clone <repo-url> ~/trueGate
+cd ~/trueGate
 npm install && npm run build
 ```
 
-(Once published to npm: `npm install -g truegate`.)
-
-## 2. Initialize governance in your project
+Optional — add a `truegate` alias so you can run it from anywhere:
 
 ```bash
-cd /path/to/your-project
-truegate init
+# ~/.zshrc or ~/.bashrc
+alias truegate="node ~/trueGate/dist/cli/index.cjs"
 ```
 
-Two files are created:
+---
 
-- **`.truegate/governance.md`** — prose. Your team's coding standards, architecture rules, anti-patterns. Injected as a system message into every LLM request.
-- **`.truegate/rules.yaml`** — machine-readable rules: forbidden dependencies, forbidden frameworks, dangerous regex patterns.
+## 2. Configure your provider
 
-trueGate also auto-loads `CLAUDE.md`, `AGENTS.md`, and `.cursor/rules/*.mdc` if they exist.
 
-Verify what got loaded:
+The wizard asks which upstream you want ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), OpenAI, Anthropic, Ollama, LM Studio, GitHub Copilot, or a custom URL) and saves the answer to `.state/config.json` inside the trueGate folder. Nothing is written anywhere else on your machine.
 
-```bash
-truegate inspect
-```
+---
 
 ## 3. Start the proxy
 
-Pick one of the presets below. trueGate listens on `http://localhost:8457` by default.
-
-### Option A — CLIProxyAPI (Claude Code / Codex / multi-provider via OAuth)
-
-If you already use [CLIProxyAPI](https://help.router-for.me) on port 8317:
-
 ```bash
-TRUEGATE_PROVIDER=cliproxy truegate serve
-```
-
-That's it. trueGate auto-targets `http://127.0.0.1:8317`. Your client's auth token is forwarded verbatim.
-
-### Option B — Direct Anthropic
-
-```bash
-TRUEGATE_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-ant-... truegate serve
-```
-
-### Option C — Direct OpenAI
-
-```bash
-TRUEGATE_PROVIDER=openai OPENAI_API_KEY=sk-... truegate serve
-```
-
-### Option D — Local Ollama (no API key needed)
-
-```bash
-# Start ollama first: `ollama serve`
-TRUEGATE_PROVIDER=ollama truegate serve
-```
-
-### Option E — Local LM Studio
-
-```bash
-TRUEGATE_PROVIDER=lmstudio truegate serve
-```
-
-### Option F — Anything else (Groq, Azure, Together, …)
-
-```bash
-TRUEGATE_PROVIDER=custom \
-TRUEGATE_UPSTREAM_URL=https://api.groq.com/openai/v1 \
-TRUEGATE_API_KEY=gsk_... \
 truegate serve
 ```
 
-## 4. Point your IDE at it
+With no flags, trueGate probes every potential upstream and builds a live registry. Each request is dispatched to the right backend by model name automatically:
 
-trueGate exposes **three native API shapes** so it's a drop-in for any of them:
+```
+[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-5, gpt-5.5, …)
+[truegate] ollama     localhost:11434  ✓ 4 models (llama3.1, qwen2.5-coder, …)
+[truegate] lmstudio   localhost:1234   ✗ unreachable
+[truegate] mode=auto, priority=openai>anthropic>cliproxy>ollama>lmstudio
+trueGate proxy listening on http://localhost:8457
+  → governance: bundled defaults (data/) + operator overrides (.state/)
+```
 
-| Endpoint                    | Used by                                                            |
-| --------------------------- | ------------------------------------------------------------------ |
-| `POST /v1/messages`         | Claude Code, Anthropic SDK                                         |
-| `POST /v1/chat/completions` | OpenAI SDK, Cursor, Continue.dev, Codex (older), Cody, most things |
-| `POST /v1/responses`        | Codex (current), OpenAI Responses API SDKs                         |
-
-Per-IDE setup recipes are in **[ide-setup.md](./ide-setup.md)**. Highlights:
-
-**Claude Code**:
+To force a specific upstream:
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8457 \
-ANTHROPIC_AUTH_TOKEN=your-token \
-claude
+truegate serve --provider cliproxy    # always use CLIProxyAPI
+truegate serve --provider ollama      # always use local Ollama
+truegate serve --provider openai --token sk-...
 ```
 
-**Cursor** (Settings → Models → Override OpenAI Base URL):
+---
 
-```
-http://localhost:8457/v1
-```
+trueGate is installed **once**, wherever you like, and runs continuously as your personal AI governance layer. It covers every IDE and every AI tool on your machine — no per-project setup, nothing added to your repos.
+## 4. Point your IDEs at trueGate
 
-**Any OpenAI SDK**:
+Set all your AI tools to use `http://localhost:8457` as their base URL:
 
-```python
-client = OpenAI(base_url="http://localhost:8457/v1", api_key="...")
-```
+| IDE | Where to set it |
+| --- | --- |
+| Claude Code | `ANTHROPIC_BASE_URL=http://localhost:8457` |
+| Cursor | Settings → Models → Override OpenAI Base URL → `http://localhost:8457/v1` |
+| Codex CLI | `OPENAI_BASE_URL=http://localhost:8457/v1` |
+| Continue.dev | `baseUrl: "http://localhost:8457/v1"` in config |
+| Any OpenAI SDK | `base_url="http://localhost:8457/v1"` |
+| Any Anthropic SDK | `base_url="http://localhost:8457"` |
 
-## 5. Verify it's working
+Full per-IDE recipes: [ide-setup.md](./ide-setup.md)
+
+---
+
+## 5. Verify
 
 ```bash
-# Should return "alpha" — confirms governance was injected and validated cleanly
-curl -sS http://localhost:8457/v1/messages \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: your-token' \
-  -H 'anthropic-version: 2023-06-01' \
-  -d '{"model":"claude-haiku-4-5-20251001","max_tokens":40,"messages":[{"role":"user","content":"reply: alpha"}]}'
+truegate status    # proxy health + upstream registry
+truegate inspect   # what governance is loaded
 ```
 
-You should also see your governance text in the system message — verify with:
+Every response ends with two lines:
+
+```
+— trueGate · cliproxy/claude-sonnet-4-5
+Governance: operator bundle
+```
+
+This confirms governance ran and which backend served the request. The `x-truegate-upstream: provider/model` response header carries the same info programmatically.
+
+---
+
+## 6. Customize governance (optional)
+
+trueGate ships with sensible defaults in `data/`. To add your own rules:
 
 ```bash
-truegate inspect
+truegate global-init   # creates .state/governance.md + .state/rules.yaml
+truegate kb-init       # creates a full operator knowledge base in .state/
 ```
 
-## What now?
+Edit `.state/governance.md` in any text editor — changes take effect within 5 seconds, no restart needed. See [governance.md](./governance.md) for the full schema.
 
-- **[ide-setup.md](./ide-setup.md)** — per-IDE recipes
-- **[governance.md](./governance.md)** — writing effective rules
-- **[architecture.md](./architecture.md)** — how trueGate works internally
-- **[troubleshooting.md](./troubleshooting.md)** — common gotchas
+---
 
+```bash
+truegate setup
+```
 ## Run as a background service
 
-Most users start trueGate once and forget about it. To run on login:
+Start trueGate once and forget about it.
 
-**macOS (launchd)**:
+**Linux (systemd user unit):**
 
-```xml
-<!-- ~/Library/LaunchAgents/com.truegate.plist -->
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.truegate</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/local/bin/node</string>
-    <string>/path/to/trueGate/dist/cli/index.cjs</string>
-    <string>serve</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>TRUEGATE_PROVIDER</key><string>cliproxy</string>
-  </dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-</dict></plist>
-```
-
-Then: `launchctl load ~/Library/LaunchAgents/com.truegate.plist`
-
-**Linux (systemd user unit)**:
-
-```ini
-# ~/.config/systemd/user/truegate.service
+```bash
+cat > ~/.config/systemd/user/truegate.service <<'UNIT'
 [Unit]
 Description=trueGate governance proxy
 After=network.target
 
 [Service]
-Environment=TRUEGATE_PROVIDER=cliproxy
-ExecStart=/usr/bin/node /path/to/trueGate/dist/cli/index.cjs serve
+WorkingDirectory=/home/YOU/trueGate
+ExecStart=/usr/bin/node /home/YOU/trueGate/dist/cli/index.cjs serve
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
+UNIT
+
+systemctl --user enable --now truegate
+systemctl --user status truegate
 ```
 
-Then: `systemctl --user enable --now truegate`
+**macOS (launchd):**
 
-**Windows** — use NSSM or run from PowerShell startup.
+```xml
+<!-- ~/Library/LaunchAgents/com.truegate.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.truegate</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/YOU/trueGate/dist/cli/index.cjs</string>
+    <string>serve</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/YOU/trueGate</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.truegate.plist
+```

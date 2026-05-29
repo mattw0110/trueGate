@@ -11,6 +11,8 @@ import {
   resolveMarker,
   appendMarker,
   formatMarker,
+  governanceNote,
+  markerWithNote,
 } from '../../validators/reporting/response-marker.js';
 import { pickUpstreamForModel } from '../../registry/route-model.js';
 import type { TrueGateConfig, UpstreamRegistry, UpstreamEndpoint } from '../../types/runtime.js';
@@ -234,7 +236,9 @@ function applyGovernanceAndMarker(
       };
     }
     if (result.severity === 'warn') {
-      const suffix = formatWarnings(result) + (marker ? `\n\n${marker}` : '');
+      const note = governanceNote(marker, true, 'warn');
+      const fullMarker = note ? `${marker}\n${note}` : marker;
+      const suffix = formatWarnings(result) + (fullMarker ? `\n\n${fullMarker}` : '');
       return {
         ...response,
         choices: [
@@ -251,7 +255,8 @@ function applyGovernanceAndMarker(
   }
 
   if (!marker) return response;
-  const suffix = `\n\n${marker}`;
+  const note = governanceNote(marker, !!context, 'pass');
+  const suffix = markerWithNote(marker, note);
   return {
     ...response,
     choices: [
@@ -270,6 +275,7 @@ function sendChatCompletion(
   context: CompiledContext | undefined,
   marker: string,
   log?: (level: 'warn' | 'info', msg: string) => void,
+  upstreamHeader?: string,
 ) {
   const decorated = applyGovernanceAndMarker(response, context, marker, requestBody.messages ?? []);
   const convention = detectClientConvention(requestBody);
@@ -278,6 +284,7 @@ function sendChatCompletion(
       ? extractAdvertisedAgentZeroTools(requestBody.messages ?? [])
       : undefined;
   const normalized = translateResponseToConvention(decorated, convention, log, agentZeroTools);
+  if (upstreamHeader) reply.header('x-truegate-upstream', upstreamHeader);
   if ((requestBody as { stream?: unknown }).stream === true) {
     return reply
       .header('content-type', 'text/event-stream; charset=utf-8')
@@ -343,7 +350,16 @@ export function registerChatCompletionsRoute(
           const translator = new AnthropicProvider(key, endpoint.baseUrl);
           const response = await translator.complete(reinforcedBody);
           const marker = formatMarker(baseMarker, endpoint.provider, response.model);
-          return sendChatCompletion(reply, response, reinforcedBody, context, marker, log);
+          const upstreamHeader = `${endpoint.provider}/${response.model ?? requestedModel}`;
+          return sendChatCompletion(
+            reply,
+            response,
+            reinforcedBody,
+            context,
+            marker,
+            log,
+            upstreamHeader,
+          );
         }
 
         const incoming = request.headers as Record<string, string | string[] | undefined>;
@@ -390,7 +406,16 @@ export function registerChatCompletionsRoute(
 
         const json = (await res.json()) as ChatCompletionResponse;
         const marker = formatMarker(baseMarker, endpoint.provider, json.model ?? requestedModel);
-        return sendChatCompletion(reply, json, reinforcedBody, context, marker, log);
+        const upstreamHeader = `${endpoint.provider}/${json.model ?? requestedModel}`;
+        return sendChatCompletion(
+          reply,
+          json,
+          reinforcedBody,
+          context,
+          marker,
+          log,
+          upstreamHeader,
+        );
       } catch (err) {
         fastify.log.error(err, 'Provider error');
         return reply.status(502).send({

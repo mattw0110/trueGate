@@ -40,3 +40,34 @@ export function appendMarker(text: string, marker: string): string {
   if (!marker) return text;
   return text + markerSuffix(marker);
 }
+
+/**
+ * Build the governance note that appears on the line immediately after the
+ * trueGate marker, telling the operator what governance did on this request.
+ *
+ *   — trueGate · cliproxy/gpt-5.5
+ *   Governance: operator bundle
+ *
+ *   — trueGate · cliproxy/claude-sonnet-4-5
+ *   Governance: ⚠ policy applied
+ *
+ * Returns '' when the marker is suppressed or no context was loaded.
+ */
+export function governanceNote(
+  marker: string,
+  contextActive: boolean,
+  severity: 'pass' | 'warn' | 'block' | undefined,
+): string {
+  if (!marker || !contextActive) return '';
+  if (severity === 'warn') return 'Governance: ⚠ policy applied';
+  return 'Governance: operator bundle';
+}
+
+/**
+ * Combine marker + governance note into the full two-line suffix:
+ *   \n\n— trueGate · provider/model\nGovernance: operator bundle
+ */
+export function markerWithNote(marker: string, note: string): string {
+  if (!marker) return '';
+  return `\n\n${marker}${note ? `\n${note}` : ''}`;
+}

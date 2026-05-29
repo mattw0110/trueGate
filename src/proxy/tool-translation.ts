@@ -370,6 +370,24 @@ function summarizeTodos(a: Record<string, unknown>): string {
 const NATIVE_AGENT_ZERO_TOOLS = new Set<string>(LIVE_AGENT_ZERO_TOOLS);
 
 export function canonicalize(name: string, args: Record<string, unknown>): CanonicalCall {
+  // Handle dotted dispatch shape that smaller / less-trained models emit when
+  // they conflate "tool name + action" into one identifier (e.g.
+  // "text_editor.read", "code_execution_tool.terminal"). Without this split,
+  // the catch-all branch returns the dotted name verbatim and the advertised
+  // -tool check blocks it as "not currently advertised".
+  if (name.includes('.')) {
+    const [base, ...rest] = name.split('.');
+    const action = rest.join('.');
+    if (base && action && NATIVE_AGENT_ZERO_TOOLS.has(base.toLowerCase())) {
+      const merged: Record<string, unknown> =
+        typeof args.action === 'string' ? args : { ...args, action };
+      const originalName = name;
+      const canon = canonicalize(base, merged);
+      // Preserve the original dotted name so logs/diagnostics still show it.
+      return { ...canon, originalName };
+    }
+  }
+
   const lower = name.toLowerCase();
   const adapter = ADAPTERS[lower];
   if (adapter) {
@@ -643,14 +661,79 @@ function coerceParam(trimmed: string): unknown {
   return trimmed;
 }
 
+/**
+ * Heuristic check: does this string LOOK like an agent-zero envelope, even if
+ * it doesn't parse cleanly as JSON? Used as a safety net to prevent
+ * double-wrapping when the upstream emitted a valid-looking envelope but a
+ * stray character broke our strict parse.
+ */
+export function looksLikeAgentZeroEnvelopeShape(content: string): boolean {
+  if (typeof content !== 'string' || content.length === 0) return false;
+  const sample = content.slice(0, 8192);
+  return /"tool_name"\s*:\s*"[a-zA-Z_][\w-]*"/.test(sample) && /"tool_args"\s*:\s*\{/.test(sample);
+}
+
+/**
+ * Extract the longest substring starting at the first `{` whose braces balance,
+ * ignoring braces inside JSON string literals. Returns null if no balanced
+ * region exists. Used as a fallback for upstream payloads that include prose
+ * or trailing characters around an otherwise-valid JSON envelope.
+ */
+function extractBalancedJsonObject(input: string): string | null {
+  const start = input.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < input.length; i++) {
+    const ch = input[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return input.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 /** Parse an agent-zero envelope from a JSON string (or fenced JSON). */
 export function parseAgentZeroEnvelope(content: string): CanonicalCall | null {
   const unfenced = stripFences(content);
+  // First try the cheap "outermost braces" slice. Then fall back to a
+  // balanced-brace scan that ignores braces inside string literals — this is
+  // the case that bit us in production: a valid envelope followed by stray
+  // characters (extra newline, partial fence, trueGate marker bleed) made the
+  // strict slice unparseable and trueGate double-wrapped.
+  const candidates = new Set<string>();
   const start = unfenced.indexOf('{');
   const end = unfenced.lastIndexOf('}');
-  if (start === -1 || end <= start) return null;
+  if (start !== -1 && end > start) candidates.add(unfenced.slice(start, end + 1));
+  const balanced = extractBalancedJsonObject(unfenced);
+  if (balanced) candidates.add(balanced);
+  if (candidates.size === 0) return null;
+  for (const slice of candidates) {
+    const result = tryParseEnvelopeSlice(slice);
+    if (result) return result;
+  }
+  return null;
+}
+
+function tryParseEnvelopeSlice(slice: string): CanonicalCall | null {
   try {
-    const parsed: unknown = JSON.parse(unfenced.slice(start, end + 1));
+    const parsed: unknown = JSON.parse(slice);
     if (!isRecord(parsed)) return null;
     if (typeof parsed.tool_name !== 'string' || !isRecord(parsed.tool_args)) return null;
     const thoughts = Array.isArray(parsed.thoughts)
@@ -1006,6 +1089,18 @@ export function translateResponseToConvention(
   if (!canonical) {
     if (convention !== 'agent-zero') return response;
     const content = typeof message.content === 'string' ? message.content : '';
+    // Belt-and-suspenders: if the strict parser missed but the content
+    // still looks structurally like an envelope (tool_name + tool_args
+    // keys present), DON'T re-wrap. Double-wrapping turns the user's
+    // chat into escaped JSON. Forward the content verbatim instead.
+    if (looksLikeAgentZeroEnvelopeShape(content)) {
+      log?.(
+        'warn',
+        `agent-zero: envelope-shaped content failed strict parse; forwarding verbatim to avoid double-wrap. ` +
+          `content.length=${content.length}`,
+      );
+      return response;
+    }
     // Detect "plan-of-record" stalling: the model said what it'll do but didn't do it.
     // Helps operators spot when the upstream is winding down mid-task vs giving a real answer.
     if (looksLikePlanOfRecord(content)) {

@@ -1,13 +1,13 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, writeFile, access } from 'node:fs/promises';
-import { TRUEGATE_DIR, GOVERNANCE_FILE, RULES_FILE } from '../../config/constants.js';
+import { GOVERNANCE_FILE, RULES_FILE } from '../../config/constants.js';
+import { stateDir } from '../../config/paths.js';
 
 const DEFAULT_GLOBAL_GOVERNANCE_MD = `# Operator Governance — applies to EVERY project
 
-This file is loaded from ~/.truegate/governance.md on every request, BEFORE
-any per-project governance. Use it for rules you want enforced everywhere,
-regardless of which repo trueGate is serving.
+This file lives in trueGate's own state directory (.state/governance.md inside
+the trueGate repo) and is loaded on every request. Use it for rules you want
+enforced everywhere, regardless of which repo trueGate is serving.
 
 ## Always
 
@@ -50,7 +50,7 @@ typescriptRules:
 `;
 
 export async function runGlobalInit(options: { force?: boolean }): Promise<void> {
-  const dir = join(homedir(), TRUEGATE_DIR);
+  const dir = stateDir();
   const govPath = join(dir, GOVERNANCE_FILE);
   const rulesPath = join(dir, RULES_FILE);
 
@@ -62,16 +62,16 @@ export async function runGlobalInit(options: { force?: boolean }): Promise<void>
   ] as const) {
     const exists = await fileExists(path);
     if (exists && !options.force) {
-      console.log(`  skip  ~/${TRUEGATE_DIR}/${name} (already exists; --force to overwrite)`);
+      console.log(`  skip  .state/${name} (already exists; --force to overwrite)`);
       continue;
     }
     await writeFile(path, content, 'utf-8');
-    console.log(`  ${exists ? 'overwrite' : 'create'}  ~/${TRUEGATE_DIR}/${name}`);
+    console.log(`  ${exists ? 'overwrite' : 'create'}  .state/${name}`);
   }
 
   console.log();
-  console.log('Global governance initialized at ~/.truegate/');
-  console.log('These rules apply on top of every project trueGate serves.');
+  console.log(`Operator governance initialized at ${dir}`);
+  console.log('These rules apply to every request trueGate serves.');
 }
 
 async function fileExists(p: string): Promise<boolean> {

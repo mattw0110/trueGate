@@ -3,47 +3,31 @@ import { buildRuntimeContext } from '../../src/governance/compiler/build-runtime
 import { resolveSourceOrder } from '../../src/governance/compiler/resolve-priority.js';
 import type { GovernanceFile } from '../../src/types/governance.js';
 
-const makeFile = (source: GovernanceFile['source'], content: string): GovernanceFile => ({
-  source,
-  projectRoot: '/test',
+const makeFile = (content: string): GovernanceFile => ({
+  source: 'global',
+  sourcePath: '/home/test/.truegate',
   content,
 });
 
 describe('resolveSourceOrder', () => {
-  it('orders project sources before global (claude > agents > cursor > global)', () => {
-    const files = [
-      makeFile('global', 'G'),
-      makeFile('agents', 'A'),
-      makeFile('cursor', 'C'),
-      makeFile('claude', 'CL'),
-    ];
+  it('returns files unchanged (operator-wide is the only source)', () => {
+    const files = [makeFile('one'), makeFile('two')];
     const ordered = resolveSourceOrder(files);
-    expect(ordered.map((f) => f.source)).toEqual(['claude', 'agents', 'cursor', 'global']);
+    expect(ordered.map((f) => f.content)).toEqual(['one', 'two']);
   });
 });
 
 describe('buildRuntimeContext', () => {
-  it('frames the system message with conflict policy and includes project sources first', () => {
-    const files = [
-      makeFile('global', 'Operator-wide guidance here.'),
-      makeFile('claude', 'CLAUDE rules here.'),
-    ];
-    const ctx = buildRuntimeContext(files);
-    expect(ctx.systemMessage).toContain('PROJECT documentation');
-    expect(ctx.systemMessage).toContain('OPERATOR-WIDE guidance');
+  it('frames the system message and includes operator-wide content', () => {
+    const ctx = buildRuntimeContext([makeFile('Operator-wide guidance here.')]);
+    expect(ctx.systemMessage).toContain('How to use this context');
     expect(ctx.systemMessage).toContain('Operator-wide guidance here.');
-    expect(ctx.systemMessage).toContain('CLAUDE rules here.');
-    // Project content appears before operator-wide content
-    expect(ctx.systemMessage.indexOf('CLAUDE rules here.')).toBeLessThan(
-      ctx.systemMessage.indexOf('Operator-wide guidance here.'),
-    );
+    expect(ctx.systemMessage).toContain('trueGate');
   });
 
-  it('lists sources in compiled context', () => {
-    const files = [makeFile('global', 'g'), makeFile('agents', 'a')];
-    const ctx = buildRuntimeContext(files);
+  it('lists global source in compiled context', () => {
+    const ctx = buildRuntimeContext([makeFile('x')]);
     expect(ctx.sources).toContain('global');
-    expect(ctx.sources).toContain('agents');
   });
 
   it('returns context with framing even for no files', () => {
@@ -53,10 +37,10 @@ describe('buildRuntimeContext', () => {
     expect(ctx.systemMessage).toContain('How to use this context');
   });
 
-  it('global rules.yaml drives forbiddenDependencies (per-project rules.yaml no longer exists)', () => {
+  it('global rules.yaml drives forbiddenDependencies', () => {
     const rulesFile: GovernanceFile = {
       source: 'global',
-      projectRoot: '/test',
+      sourcePath: '/home/test/.truegate',
       content: '',
       frontMatter: {
         rules: {

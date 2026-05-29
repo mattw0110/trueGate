@@ -1,17 +1,13 @@
-import { readUserConfig, resolveConfig } from '../../config/user-config.js';
 import { loadGovernanceContext } from '../../proxy/middleware/governance-loader.js';
 import {
   formatContextSummary,
   formatOverrideReport,
 } from '../../validators/reporting/override-report.js';
 
-export async function runInspect(options: { project?: string }): Promise<void> {
-  const config = resolveConfig(await readUserConfig());
-  if (options.project) config.projectRoot = options.project;
+export async function runInspect(_options: Record<string, unknown> = {}): Promise<void> {
+  console.log(`Inspecting trueGate governance (bundled defaults + .state/ overrides)\n`);
 
-  console.log(`Inspecting governance for: ${config.projectRoot}\n`);
-
-  const context = await loadGovernanceContext(config.projectRoot);
+  const context = await loadGovernanceContext();
 
   console.log(formatContextSummary(context));
 

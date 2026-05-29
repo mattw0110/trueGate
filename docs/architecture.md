@@ -1,149 +1,139 @@
 # Architecture
 
-trueGate is a thin Fastify proxy. Every request flows through the same four-stage pipeline:
+trueGate is a thin Fastify proxy. Every request flows through a four-stage pipeline:
 
 ```
-                          ┌────────────────────────┐
-   client ───── POST ────▶│ governance-loader hook │  loads/refreshes governance
-   (Claude   /v1/messages │    (onRequest)         │  files for projectRoot
-    Code,    /v1/chat/…   └───────────┬────────────┘
-    Cursor,  /v1/responses            ▼
-    SDK…)                 ┌────────────────────────┐
-                          │ route-specific request │  Anthropic shape: inject into
-                          │  injector              │  `system` field
-                          │    (preHandler /       │  OpenAI shape: prepend to
-                          │     in-route)          │  `messages`
-                          └───────────┬────────────┘  Responses shape: append to
-                                      ▼               `instructions`
-                          ┌────────────────────────┐
-                          │  upstream HTTP call    │  Forwards client headers
-                          │  (undici fetch)        │  (auth, anthropic-version,
-                          │                        │   copilot-integration-id)
-                          └───────────┬────────────┘
-                                      ▼
-                          ┌────────────────────────┐
-                          │ response validator     │  Extracts text from response,
-                          │  (in-route, route-     │  runs all validators,
-                          │   specific shape)      │  block→refusal, warn→append
-                          └───────────┬────────────┘
-                                      ▼
-                                  client
+                      ┌────────────────────────┐
+ client ───── POST ──▶│ governance-loader hook │  loads operator governance
+ (Claude   /v1/…     │    (onRequest)         │  from data/ + .state/
+  Code,               └───────────┬────────────┘
+  Cursor,                         ▼
+  SDK…)               ┌────────────────────────┐
+                      │  model routing         │  pickUpstreamForModel()
+                      │  (per-request)         │  exact match → prefix pattern
+                      │                        │  → highest-priority fallback
+                      └───────────┬────────────┘
+                                  ▼
+                      ┌────────────────────────┐
+                      │  governance injection  │  injects system message
+                      │  + upstream HTTP call  │  forwards auth headers
+                      │                        │
+                      └───────────┬────────────┘
+                                  ▼
+                      ┌────────────────────────┐
+                      │  response validator    │  runs all validators
+                      │  + marker append       │  block → refusal
+                      │                        │  warn → appended notice
+                      └───────────┬────────────┘
+                                  ▼
+                              client
+                     (+ x-truegate-upstream header
+                      + "— trueGate · provider/model" trailer)
 ```
 
 ---
 
-## Pieces
+## Key modules
 
-### `src/proxy/server.ts`
+### `src/registry/`
 
-Fastify factory. Registers:
+Builds the upstream registry at startup:
 
-- **onRequest hook**: governance loader (caches 5s per projectRoot)
-- **preHandler hook**: request compiler for `/v1/chat/completions` only (skips other routes)
-- Three routes: `/v1/messages`, `/v1/chat/completions`, `/v1/responses`
-
-The OpenAI-shape onSend response validator hook is left in place for `/v1/chat/completions` because that route uses the legacy provider abstraction. The `/v1/messages` and `/v1/responses` routes do response validation inline in the handler (they need access to the route-specific response shape).
+- **`upstream-registry.ts`** — probes each potential upstream in parallel (1.5s timeout each), enumerates available models, builds `UpstreamEndpoint[]` sorted by priority.
+- **`route-model.ts`** — `pickUpstreamForModel(model, registry, config)` resolves which endpoint serves a given model. Resolution order: forced provider → `modelOverrides` → exact match → prefix patterns (`claude-*`, `gpt-*`, `llama*`, …) → substring scan → fallback to highest-priority reachable upstream.
+- **`model-patterns.ts`** — prefix-to-provider hints.
+- **`probe.ts`** — shared HTTP probe helper with configurable timeout and JSON parsing.
 
 ### `src/governance/`
 
-- **`loaders/`** — one per source (`truegate`, `claude`, `agents`, `cursor`). Each returns `null` if its file isn't there. Never throws.
-- **`compiler/merge-context.ts`** — runs all loaders in parallel.
-- **`compiler/resolve-priority.ts`** — orders sources, extracts `RuleSet`.
+Loads and compiles operator governance at request time:
+
+- **`loaders/global-loader.ts`** — reads `.state/governance.md` + `.state/rules.yaml` (operator overrides), falling back to `data/governance.md` + `data/rules.yaml` (shipped defaults) per file. Returns `null` if neither exists.
+- **`compiler/merge-context.ts`** — calls the global loader and returns the file list.
+- **`compiler/resolve-priority.ts`** — sorts files (single source: `global`), extracts `RuleSet`.
 - **`compiler/build-runtime-context.ts`** — builds the system-message text.
-- **`compiler/anthropic-injector.ts`** — inserts governance into Anthropic `system` field (string or array form, preserves cache_control).
+- **`compiler/anthropic-injector.ts`** — inserts governance into Anthropic `system` field.
 - **`compiler/responses-injector.ts`** — appends governance to Responses API `instructions`.
 
 ### `src/validators/`
 
-- **`rules/dangerous-patterns.ts`** — hardcoded block regexes (`rm -rf /`, `curl | sh`, leaked keys, `DROP TABLE`, …) + user-supplied patterns from `rules.yaml`.
-- **`rules/forbidden-dependencies.ts`** — npm/import grep against blocklist.
-- **`rules/forbidden-frameworks.ts`** — string match.
-- **`rules/typescript-rules.ts`** — `: any` and `tsconfig` missing strict.
-- **`engine/validate-response.ts`** — fan out, aggregate.
-- **`engine/validate-anthropic-response.ts`** — extracts `content[*].text`, then runs the engine.
-- **`engine/validate-responses-response.ts`** — extracts `output_text` or output items, then runs the engine.
-- **`reporting/warning-formatter.ts`** — produces the ⚠/🚫 blocks.
-
-### `src/providers/`
-
-| File | Role |
-| --- | --- |
-| `openai/openai-provider.ts` | Generic OpenAI-compatible HTTP client (used by legacy chat-completions path and any preset that needs translation) |
-| `shared/provider-factory.ts` | Picks the right provider given `TrueGateConfig` |
-| `anthropic/anthropic-provider.ts` | OpenAI → Anthropic Messages API translator. Activated only when `TRUEGATE_PROVIDER=anthropic` and a client sends an OpenAI-shaped chat-completions request |
-| `anthropic/anthropic-passthrough.ts` | Anthropic-native passthrough. Forwards `x-api-key` and `anthropic-version` verbatim |
+- **`rules/dangerous-patterns.ts`** — hardcoded block regexes + user patterns from `rules.yaml`.
+- **`rules/forbidden-dependencies.ts`**, **`forbidden-frameworks.ts`**, **`typescript-rules.ts`** — per-rule validators.
+- **`engine/validate-response.ts`** — fan-out, aggregate across all validators.
+- **`reporting/response-marker.ts`** — `formatMarker(base, provider, model)` produces `— trueGate · cliproxy/gpt-5.5`.
 
 ### `src/proxy/routes/`
 
-| Route | Behavior |
-| --- | --- |
-| `chat-completions.ts` | Passthrough OR Anthropic-translator. Forwards `Authorization` header from the client; falls back to stored `OPENAI_API_KEY` / `GITHUB_TOKEN`. Block/warn happens in onSend hook |
-| `messages.ts` | Anthropic-native passthrough. Governance injected into `system` field. Block/warn happens in-route |
-| `responses.ts` | OpenAI Responses API passthrough. Governance injected into `instructions`. Block/warn happens in-route |
+| Route | Shape | Governance injection |
+| --- | --- | --- |
+| `chat-completions.ts` | OpenAI chat | Prepended system message; Anthropic translator active when endpoint is `anthropic` |
+| `messages.ts` | Anthropic native | Injected into `system` field |
+| `responses.ts` | OpenAI Responses | Appended to `instructions` |
 
-### `src/cli/`
+All three routes:
 
-Commander. Subcommands:
+1. Call `pickUpstreamForModel` to resolve the endpoint for this request's model.
+2. Log `routed model=X → provider (url) via reason`.
+3. Set `x-truegate-upstream: provider/model` response header.
+4. Append `— trueGate · provider/model` marker via `formatMarker`.
 
-- `init` — write `.truegate/{governance.md,rules.yaml}` from defaults
-- `serve` — `buildServer(loadConfig()).listen()`
-- `validate` — run validators against a file/stdin
-- `inspect` — print compiled context
+### `src/proxy/tool-translation.ts`
+
+Handles agent-zero clients that send OpenAI-shaped requests but expect `{"thoughts":…,"tool_name":…,"tool_args":…}` JSON envelope responses. Key behaviors:
+
+- **`detectClientConvention`** — sniffs `response_format.json_schema.name === 'agent_zero_envelope'`.
+- **`parseUpstreamCall`** — tries every parser (OpenAI tool_calls, Anthropic tool_use, agent-zero envelope, XML function_calls, prose tool calls, bash fences) in order.
+- **`translateResponseToConvention`** — normalizes upstream response to agent-zero envelope if client is agent-zero. Includes allowlist check against advertised tools (handles `### input:` colon suffix). Falls back to wrapping plain text; short-circuits if content already looks like an envelope (prevents double-wrapping).
+- **`canonicalize`** — maps from any naming convention (XML `<Bash>`, dotted `text_editor.read`, Anthropic `computer_use`) to agent-zero's canonical names. Handles dotted dispatch like `text_editor.read` → `{name: 'text_editor', args: {action: 'read'}}`.
+
+### `src/config/paths.ts`
+
+Single source of truth for repo-relative paths:
+
+```
+repoRoot()   →  <repo>/
+dataDir()    →  <repo>/data/          (TRUEGATE_DATA_DIR to override)
+stateDir()   →  <repo>/.state/        (TRUEGATE_STATE_DIR to override)
+vendorDir()  →  <repo>/vendor/        (TRUEGATE_VENDOR_DIR to override)
+```
+
+Repo root is discovered by walking up from `paths.ts` looking for `package.json {"name":"truegate"}`.
 
 ---
 
-## Request lifecycles in detail
-
-### Claude Code → trueGate → CLIProxyAPI → Anthropic
+## Request lifecycle: Claude Code → trueGate → [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)
 
 ```
 Claude Code
   POST /v1/messages
   x-api-key: <cliproxy-token>
-  anthropic-version: 2023-06-01
-  body: { messages: [...] }
        ↓
 trueGate :8457
-  onRequest:    load .truegate/, CLAUDE.md, etc. → CompiledContext
-  in-route:     injectGovernanceIntoAnthropic(body, ctx) → adds `system`
-  upstream:     POST http://127.0.0.1:8317/v1/messages
-                (forwards x-api-key, anthropic-version)
+  onRequest: load data/ + .state/ → CompiledContext
+  pick endpoint: model=claude-sonnet-4-5 → exact match → cliproxy
+  in-route: injectGovernanceIntoAnthropic(body, ctx) → adds `system`
+  upstream: POST http://127.0.0.1:8317/v1/messages
+  response: validateResponse + appendMarker → "— trueGate · cliproxy/claude-sonnet-4-5"
+  header:   x-truegate-upstream: cliproxy/claude-sonnet-4-5
        ↓
 CLIProxyAPI :8317
   reads OAuth-stored Anthropic credentials
   calls real api.anthropic.com
-       ↓
-real Anthropic returns response
-       ↓
-CLIProxyAPI returns AnthropicNativeResponse
-       ↓
-trueGate in-route:
-  extractAnthropicText(response)
-  validateResponse(text, ctx.rules)
-  if block: replace content with refusal
-  if warn:  append warning block
-  send to client
 ```
 
-### Cursor → trueGate → Ollama
+## Request lifecycle: Cursor → trueGate → Ollama
 
 ```
 Cursor
-  POST /v1/chat/completions   (no auth header for local Ollama)
-  body: { model: "llama3", messages: [...] }
+  POST /v1/chat/completions
+  body: { model: "llama3.1", messages: [...] }
        ↓
 trueGate :8457
-  onRequest:    load governance
-  preHandler:   inject system message into messages[]
-  in-route:     POST http://localhost:11434/v1/chat/completions
-                (no auth header — Ollama doesn't require one)
-       ↓
-Ollama returns ChatCompletionResponse
-       ↓
-trueGate onSend hook:
-  validateResponse(choices[0].message.content, rules)
-  block/warn injection
-  send to client
+  onRequest: load governance
+  pick endpoint: model=llama3.1 → prefix "llama*" → ollama
+  in-route: prepend governance system message, POST http://localhost:11434/v1/chat/completions
+  response: validate + "— trueGate · ollama/llama3.1"
+  header:   x-truegate-upstream: ollama/llama3.1
 ```
 
 ---
@@ -152,29 +142,28 @@ trueGate onSend hook:
 
 The three API shapes have meaningfully different system-prompt and response shapes:
 
-|  | system field | response text location |
+|  | system field | response text |
 | --- | --- | --- |
 | OpenAI chat | `messages[0]` (role=system) | `choices[0].message.content` |
-| Anthropic | top-level `system` (string or content blocks with cache_control) | `content[*].text` (array of blocks) |
-| Responses | top-level `instructions` (string) | `output_text` (convenience) or `output[*].content[*].text` |
+| Anthropic | top-level `system` (string or cache_control blocks) | `content[*].text` |
+| Responses | top-level `instructions` | `output_text` / `output[*].content[*].text` |
 
-Translating any of these into another loses fidelity (caching, multi-modal content, tool calls). trueGate keeps each one native end-to-end.
+Translating between them loses fidelity (caching, multi-modal, tool calls). trueGate keeps each one native end-to-end.
 
 ---
 
 ## Caching
 
-- **Governance**: 5-second in-memory cache keyed by `projectRoot`. Edit a file → next request after 5s picks it up. No restart.
-- **Provider instance**: built lazily once on first request, reused.
-
-There is no cross-process or cross-machine caching. trueGate is stateless beyond this.
+- **Governance**: 5-second in-memory cache keyed by `stateDir()`. Edit a file and the next request after 5s picks it up. No restart needed.
+- **Upstream registry**: built once at startup. Restart trueGate to re-probe if your environment changes.
+- **Provider instances**: created on demand per endpoint and reused.
 
 ---
 
 ## What trueGate does NOT do
 
-- **Streaming**: forces `stream: false` upstream. Streaming + governance validation is a meaningful design problem (you can't validate text you haven't received yet) — planned for v0.2.
-- **Tool calls**: trueGate forwards tool_use blocks verbatim. It does not validate tool inputs.
-- **Multi-model translation**: it does not silently swap models. If a client asks for `gpt-4o`, trueGate forwards `gpt-4o`. The Anthropic translator maps `gpt-*` → `claude-*` for compatibility ONLY when `TRUEGATE_PROVIDER=anthropic` and the client sends OpenAI shape — otherwise pure passthrough.
-- **Auth on its own**: trueGate trusts whatever auth header the client sends and forwards it. It does not validate, store, or rotate keys.
-- **Dashboards / cloud sync**: out of scope. Local files, local proxy.
+- **Streaming**: forces `stream: false` upstream. Streaming + governance validation is a meaningful design problem — planned for a future release.
+- **Multi-model translation**: forwards the model field as-is. The Anthropic provider translates OpenAI request shape → Anthropic API shape, but it doesn't rename models.
+- **Auth management**: forwards whatever auth header the client sends. Does not validate, store, or rotate keys.
+- **Dev project governance**: does not read `CLAUDE.md`, `AGENTS.md`, `.cursor/rules`, or any project-specific file. That's the IDE's job.
+- **Dashboards / cloud sync**: local only.

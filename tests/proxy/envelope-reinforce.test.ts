@@ -15,7 +15,6 @@ let originalDispatcher: Dispatcher;
 const cfg = (): TrueGateConfig => ({
   port: 3458,
   logLevel: 'silent',
-  projectRoot: tmpDir,
   openAiApiKey: 'sk-test',
   provider: 'openai',
 });
@@ -113,6 +112,12 @@ describe('chat-completions: agent_zero_envelope reinforcement', () => {
     expect((reinforce as { content: string }).content).toContain('response');
     // Rule 8 (no unverified claims) — anti-hallucination guardrail
     expect((reinforce as { content: string }).content).toContain('NO UNVERIFIED CLAIMS');
+    // Do not bias the model toward Agent Zero tools that may not exist in the current profile.
+    expect((reinforce as { content: string }).content).toContain('currently advertised');
+    expect((reinforce as { content: string }).content).not.toContain('text_editor');
+    expect((reinforce as { content: string }).content).not.toContain('code_execution_tool');
+    expect((reinforce as { content: string }).content).not.toContain('search_engine');
+    expect((reinforce as { content: string }).content).not.toContain('document_query');
   });
 
   it('does NOT inject reinforcement for non-envelope requests', async () => {
@@ -306,7 +311,6 @@ describe('chat-completions: agent_zero_envelope reinforcement', () => {
     const server = buildServer({
       port: 3459,
       logLevel: 'silent',
-      projectRoot: tmpDir,
       provider: 'cliproxy',
       upstreamUrl: CLIPROXY_HOST,
     });

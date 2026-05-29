@@ -1,25 +1,17 @@
-import type { GovernanceFile, ContextSource, RuleSet } from '../../types/governance.js';
+import type { GovernanceFile, RuleSet } from '../../types/governance.js';
 import { RulesYamlSchema } from '../schemas/rules-schema.js';
 
-// PROJECT-FIRST priority. trueGate respects the project's own conventions
-// (CLAUDE.md, AGENTS.md, .cursor/rules) above the operator's global guidance.
-//
-// Operator-wide RULES (rules.yaml, machine-enforced) still fire — they are
-// not opinions, they are non-negotiable safety floors. But the operator's
-// PROSE (governance.md) is presented as guidance that defers to the project.
-const SOURCE_PRIORITY: ContextSource[] = ['claude', 'agents', 'cursor', 'global'];
-
+/**
+ * trueGate is operator-wide only — `~/.truegate/` is the single source.
+ * `resolveSourceOrder` is preserved as a no-op identity for callers that
+ * still expect a sorted list.
+ */
 export function resolveSourceOrder(files: GovernanceFile[]): GovernanceFile[] {
-  return [...files].sort((a, b) => {
-    const ai = SOURCE_PRIORITY.indexOf(a.source);
-    const bi = SOURCE_PRIORITY.indexOf(b.source);
-    return ai - bi;
-  });
+  return [...files];
 }
 
 /**
- * Aggregate machine-enforced rules. ONLY the operator-wide `global` source
- * provides a rules.yaml. Per-project trueGate artifacts no longer exist.
+ * Aggregate machine-enforced rules from operator-wide rules.yaml.
  */
 export function extractRules(files: GovernanceFile[]): RuleSet {
   const base: RuleSet = {

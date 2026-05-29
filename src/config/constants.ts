@@ -1,4 +1,3 @@
-export const TRUEGATE_DIR = '.truegate';
 export const GOVERNANCE_FILE = 'governance.md';
 export const RULES_FILE = 'rules.yaml';
 export const DEFAULT_PORT = 8457;

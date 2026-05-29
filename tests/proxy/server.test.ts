@@ -15,7 +15,6 @@ let originalDispatcher: Dispatcher;
 const testConfig = (): TrueGateConfig => ({
   port: 3458,
   logLevel: 'silent',
-  projectRoot: tmpDir,
   openAiApiKey: 'sk-test',
   provider: 'openai',
 });
@@ -67,7 +66,11 @@ describe('proxy server', () => {
     const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
     // Content includes the trueGate marker on its own line
     expect(body.choices[0]?.message.content).toContain('Here is a safe answer.');
-    expect(body.choices[0]?.message.content).toMatch(/— trueGate( · \S+\/\S+)?\s*$/);
+    expect(body.choices[0]?.message.content).toMatch(
+      /— trueGate( · \S+\/\S+)?(\nGovernance: .+)?\s*$/,
+    );
+    // x-truegate-upstream header reflects the routed upstream.
+    expect(response.headers['x-truegate-upstream']).toMatch(/^openai\/.+/);
   });
 
   it('wraps plain text when Agent Zero JSON envelope is requested', async () => {
@@ -105,7 +108,7 @@ describe('proxy server', () => {
     // The model said 'Salut'; trueGate appends its marker inside tool_args.text
     // so the marker survives Agent Zero's JSON envelope wrapping.
     expect(envelope.tool_args.text).toContain('Salut');
-    expect(envelope.tool_args.text).toMatch(/— trueGate( · \S+\/\S+)?\s*$/);
+    expect(envelope.tool_args.text).toMatch(/— trueGate( · \S+\/\S+)?(\nGovernance: .+)?\s*$/);
   });
 
   it('streams an Agent Zero envelope when streaming is requested', async () => {
