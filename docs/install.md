@@ -120,8 +120,7 @@ trueGate ships with default governance in `data/governance.md` and `data/rules.y
 To add your own operator-wide rules:
 
 ```bash
-truegate global-init   # minimal .state/governance.md + .state/rules.yaml
-truegate kb-init       # full knowledge base in .state/ (25 reference files)
+truegate global-init   # writes .state/governance.md + .state/rules.yaml
 ```
 
 Edit `.state/governance.md` to describe your coding standards, architecture, forbidden patterns. Edit `.state/rules.yaml` to add machine-enforced block/warn rules.

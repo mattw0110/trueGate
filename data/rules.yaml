@@ -1,11 +1,15 @@
-version: "1"
+version: '1'
 
-# Operator-wide enforcement rules (matt@patientize.com).
+# trueGate shipped default rules.
+#
 # These apply on TOP of every project's rules — they cannot be disabled
-# by a project's local .truegate/rules.yaml. block-severity entries here
+# by anything outside this trueGate repo. block-severity entries here
 # are effectively unremovable safety floors.
+#
+# Schema reference: docs/governance.md
+# Companion prose governance: data/governance.md (overridable via .state/)
 
-# Packages I never want in any project.
+# Packages flagged for any project.
 forbiddenDependencies:
   - moment # date-fns / Temporal instead
   - request # deprecated; use fetch / undici / axios
@@ -15,7 +19,7 @@ forbiddenDependencies:
   - colors # supply-chain risk history; use chalk
   - faker # use @faker-js/faker (the maintained fork)
 
-# Frameworks I never want suggested for new code.
+# Frameworks not to suggest for new code.
 forbiddenFrameworks:
   - jQuery
   - Backbone
@@ -30,81 +34,98 @@ dangerousPatterns:
   # ─── Credentials & secrets ─────────────────────────────────────────────
   - pattern: "process\\.env\\.\\w*SECRET"
     severity: block
-    message: "Do not interpolate environment secrets into emitted code"
+    message: 'Do not interpolate environment secrets into emitted code'
   - pattern: "process\\.env\\.\\w*PASSWORD"
     severity: block
-    message: "Do not embed env-loaded passwords in code"
+    message: 'Do not embed env-loaded passwords in code'
   - pattern: "console\\.log\\([^)]*api[_-]?key"
     severity: block
-    message: "Do not log API keys to console"
+    message: 'Do not log API keys to console'
   - pattern: "console\\.log\\([^)]*token"
     severity: warn
-    message: "Possible token in console.log — confirm this is not a credential"
+    message: 'Possible token in console.log — confirm this is not a credential'
   - pattern: "(?i)bearer\\s+[A-Za-z0-9._\\-]{20,}"
     severity: block
-    message: "Hardcoded Bearer token detected"
-  - pattern: "AKIA[0-9A-Z]{16}"
+    message: 'Hardcoded Bearer token detected'
+  - pattern: 'AKIA[0-9A-Z]{16}'
     severity: block
-    message: "AWS access key detected in code"
-  - pattern: "ghp_[A-Za-z0-9]{30,}"
+    message: 'AWS access key detected in code'
+  - pattern: 'ghp_[A-Za-z0-9]{30,}'
     severity: block
-    message: "GitHub personal access token detected"
-  - pattern: "xox[abposr]-[A-Za-z0-9-]{10,}"
+    message: 'GitHub personal access token detected'
+  - pattern: 'xox[abposr]-[A-Za-z0-9-]{10,}'
     severity: block
-    message: "Slack token detected"
+    message: 'Slack token detected'
 
   # ─── TLS / safety bypasses ─────────────────────────────────────────────
   - pattern: "rejectUnauthorized:\\s*false"
     severity: block
-    message: "Disabling TLS cert verification is not allowed"
+    message: 'Disabling TLS cert verification is not allowed'
   - pattern: "verify\\s*=\\s*False"
     severity: block
-    message: "Disabling TLS cert verification in Python requests is not allowed"
-  - pattern: "InsecureRequestWarning"
+    message: 'Disabling TLS cert verification in Python requests is not allowed'
+  - pattern: 'InsecureRequestWarning'
     severity: warn
-    message: "Suppressing insecure-request warnings usually means a hidden TLS bypass"
+    message: 'Suppressing insecure-request warnings usually means a hidden TLS bypass'
   - pattern: "NODE_TLS_REJECT_UNAUTHORIZED\\s*=\\s*['\"]?0"
     severity: block
-    message: "Globally disabling Node TLS verification is forbidden"
+    message: 'Globally disabling Node TLS verification is forbidden'
 
   # ─── Code-execution sinks ──────────────────────────────────────────────
   - pattern: "\\beval\\s*\\("
     severity: block
-    message: "eval() is forbidden"
+    message: 'eval() is forbidden'
   - pattern: "new\\s+Function\\s*\\("
     severity: block
-    message: "Function() constructor is forbidden — same risk as eval"
+    message: 'Function() constructor is forbidden — same risk as eval'
   - pattern: "exec\\(\\s*['\"`].*\\$\\{"
     severity: warn
-    message: "String-templated exec() is a shell-injection risk"
+    message: 'String-templated exec() is a shell-injection risk'
   - pattern: "subprocess\\.(call|run|Popen)\\([^)]*shell\\s*=\\s*True"
     severity: warn
-    message: "subprocess shell=True is a shell-injection risk; pass args as a list"
+    message: 'subprocess shell=True is a shell-injection risk; pass args as a list'
 
   # ─── Suppression that masks real problems ──────────────────────────────
-  - pattern: "@ts-ignore"
+  - pattern: '@ts-ignore'
     severity: warn
-    message: "@ts-ignore hides bugs — fix the underlying type"
-  - pattern: "// eslint-disable-next-line"
+    message: '@ts-ignore hides bugs — fix the underlying type'
+  - pattern: '@ts-expect-error'
     severity: warn
-    message: "Avoid disabling lint; fix the rule violation"
-  - pattern: "// @ts-nocheck"
+    message: '@ts-expect-error should be justified by a comment or removed'
+  - pattern: '// eslint-disable-next-line'
     severity: warn
-    message: "@ts-nocheck disables type safety for the whole file"
+    message: 'Avoid disabling lint; fix the rule violation'
+  - pattern: '// @ts-nocheck'
+    severity: warn
+    message: '@ts-nocheck disables type safety for the whole file'
   - pattern: "# noqa\\b"
     severity: warn
-    message: "Avoid noqa; fix the lint issue"
+    message: 'Avoid noqa; fix the lint issue'
+  - pattern: "#\\s*type:\\s*ignore"
+    severity: warn
+    message: 'Avoid `# type: ignore`; fix the underlying type instead'
+
+  # ─── Untyped escape hatches ────────────────────────────────────────────
+  - pattern: ":\\s*any\\b"
+    severity: warn
+    message: 'TypeScript `any` annotation — justify with a comment or narrow the type'
+  - pattern: "from\\s+typing\\s+import\\s+[^\\n]*\\bAny\\b"
+    severity: warn
+    message: 'Python `Any` imported — prefer a concrete type or `object` / generics'
 
   # ─── Debugging leftovers ───────────────────────────────────────────────
   - pattern: "console\\.log\\("
     severity: warn
-    message: "console.log left in code — use a real logger or remove before commit"
-  - pattern: "debugger;"
+    message: 'console.log left in code — use a real logger or remove before commit'
+  - pattern: "(?m)^\\s*print\\("
+    severity: warn
+    message: 'Python `print(` left in code — use a real logger or remove before commit'
+  - pattern: 'debugger;'
     severity: block
-    message: "debugger statement must not be committed"
+    message: 'debugger statement must not be committed'
   - pattern: "TODO\\(unowned\\)"
     severity: warn
-    message: "Unowned TODO — assign or remove"
+    message: 'Unowned TODO — assign or remove'
 
 typescriptRules:
   noAny: true

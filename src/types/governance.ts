@@ -2,16 +2,22 @@ export type ContextSource = 'global';
 
 export interface GovernanceFile {
   source: ContextSource;
-  /** Absolute filesystem path the file was loaded from (e.g. ~/.truegate). */
+  /** Absolute filesystem path the file was loaded from (e.g. <repo>/data/governance.md). */
   sourcePath: string;
   content: string;
   frontMatter?: Record<string, unknown>;
 }
 
+export interface DangerousPattern {
+  pattern: string;
+  severity: 'warn' | 'block';
+  message?: string;
+}
+
 export interface RuleSet {
   forbiddenDependencies: string[];
   forbiddenFrameworks: string[];
-  dangerousPatterns: string[];
+  dangerousPatterns: DangerousPattern[];
   typescriptRules: {
     noAny: boolean;
     requireStrict: boolean;

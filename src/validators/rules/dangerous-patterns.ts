@@ -1,4 +1,5 @@
 import type { ValidationIssue } from '../../types/validation.js';
+import type { DangerousPattern } from '../../types/governance.js';
 
 const BUILT_IN_PATTERNS: Array<{ re: RegExp; message: string }> = [
   { re: /rm\s+-rf\s+\//i, message: 'Destructive rm -rf / command detected' },
@@ -14,7 +15,7 @@ const BUILT_IN_PATTERNS: Array<{ re: RegExp; message: string }> = [
 
 export function checkDangerousPatterns(
   content: string,
-  extraPatterns: string[] = [],
+  extraPatterns: DangerousPattern[] = [],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -30,15 +31,26 @@ export function checkDangerousPatterns(
     }
   }
 
-  for (const pattern of extraPatterns) {
+  for (const entry of extraPatterns) {
     try {
-      const re = new RegExp(pattern, 'i');
+      // Patterns are case-sensitive by default; rules.yaml can opt in
+      // case-insensitivity per-pattern with a `(?i)` prefix (JS RegExp
+      // doesn't support inline flags, so strip and translate to the `i` flag).
+      let source = entry.pattern;
+      let flags = '';
+      if (source.startsWith('(?i)')) {
+        source = source.slice(4);
+        flags = 'i';
+      }
+      const re = new RegExp(source, flags);
       const match = re.exec(content);
       if (match) {
         issues.push({
-          severity: 'block',
+          severity: entry.severity,
           rule: 'dangerous-patterns',
-          message: `Blocked by governance pattern: ${pattern}`,
+          message:
+            entry.message ??
+            `${entry.severity === 'block' ? 'Blocked' : 'Flagged'} by governance pattern: ${entry.pattern}`,
           match: match[0],
         });
       }

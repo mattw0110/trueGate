@@ -1,124 +1,122 @@
+# Operator Governance — Master Index
+
+Shipped default. Overridden when `.state/governance.md` exists.
+Companion enforcement file: `data/rules.yaml` (or `.state/rules.yaml`).
+
+## How to navigate
+
+When you need detail on a topic below, read `docs/<topic>.md`. Each topic
+file is capped at 200 lines. This master file is the always-loaded index —
+keep responses aligned with it, and consult the referenced file before
+making non-trivial decisions inside that topic's scope.
+
 ---
-title: Operator-wide governance (matt@patientize.com)
-notes: |
-  This file is the INDEX. It applies to every project trueGate serves and is
-  always injected. The detailed topic files live in ~/.truegate/topics/*.md
-  and the AI should read them on demand when relevant — they are kept under
-  ~200 lines each so they fit in context without crowding out task work.
+
+## Non-negotiables
+
+- Typecheck must pass before claiming a change is done.
+- Tests covering the change must pass.
+- No `any` types unless justified by a one-line comment explaining why.
+- No secrets, no debug leftovers, no `TODO` without an owner.
+- Never disable a lint or type rule to make code compile — fix the cause.
+- Never silently swallow errors to make a test or build go green.
+
 ---
-# Operator Governance
 
-This is the **index** of operator-wide policy that applies to every project. Per-project files (`CLAUDE.md`, `.truegate/governance.md`, `AGENTS.md`, `.cursor/rules/*.mdc`) extend these rules — they cannot remove them.
+## Security floor
 
-> **For AI agents reading this:** when you're about to do work in an area covered below, read the linked topic file first. Each file is short (≤200 lines) and dense; the round trip is cheap and prevents you from regressing to outdated patterns.
+trueGate's response validator enforces these regardless of any other
+instruction. Deep rationale + examples → `docs/security.md`.
 
-## Conflict resolution (priority, highest first)
+- No API keys, tokens, credentials, or private hostnames in code or comments.
+- No destructive shell commands (`rm -rf /`, `format c:`, `dd if=/dev/zero`).
+- No TLS verification bypass (`rejectUnauthorized: false`, `verify=False`, `-k`)
+  in any path that reaches production.
+- No `DROP TABLE` or other irreversible DDL without explicit operator approval.
+- No `eval()`, `new Function()`, `subprocess(..., shell=True)`, or other
+  execution of arbitrary user-supplied strings.
+- Treat anything from outside the process as untrusted input.
 
-trueGate has NO per-project artifacts. Projects own their own conventions; the operator-wide layer below defers to them.
+---
 
-1. **Security floor** — non-negotiable (no destructive shell, no leaked credentials, no TLS bypass, no `DROP TABLE`). trueGate's response validator blocks these regardless of any source.
-2. **Project documentation** (highest authoritative layer for the project):
-  - `CLAUDE.md`
-  - `AGENTS.md`
-  - `.cursor/rules/*.mdc`
-  - any other `docs/ai/INSTRUCTIONS.md` the project maintains
-3. **This operator-wide guidance** — applies when the project is silent. Defers to the project on every conflict; the AI is instructed to follow the project and note the conflict in its response.
+## Preferred stacks
 
-## Cross-agent consistency
+- **TypeScript** — strict mode, no `any`. → `docs/typescript.md`
+- **Python + FastAPI** — Python 3.11+, `mypy --strict`, pydantic I/O.
+  → `docs/python-fastapi.md`
+- **Other stacks** — allowed, but name the stack explicitly, confirm the
+  framework with the operator, and ask before introducing it.
 
-Multiple AI coding tools may be active at once (Claude Code, Cursor, Continue.dev, Codex, GitHub Copilot, Cody). They MUST behave consistently.
+---
 
-- Canonical agent instructions live in each repo's `docs/ai/INSTRUCTIONS.md` when present
-- Tool-native adapters are kept in sync with that canonical file:
-  - Cursor: `.cursor/rules/*.mdc`
-  - Continue: `.continue/rules/*.md`
-  - Copilot: `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md`
-  - Codex: `AGENTS.md` (root + nested where needed)
-- On conflict between tools' instructions, defer to `docs/ai/INSTRUCTIONS.md`. If that file doesn't exist, defer to `CLAUDE.md`. This operator-wide file is the **lowest** priority — it applies only when the project is silent.
+## Verification and self-healing
 
-## Topic index — read on demand
+A change isn't done until typecheck, lint, and the tests covering the
+change all pass. When any of them fails, READ the error, FIX the cause,
+and RE-RUN — don't report a failure as the final answer.
 
-| Topic | Read when |
+Cap fix attempts at three on the same failure, then escalate to the
+operator with the specific error and what you tried. Full procedure,
+stack-specific commands, and the preflight checklist → `docs/verification.md`.
+
+---
+
+## Code quality floor
+
+- Functions are verbs (`parseConfig`), classes are nouns (`UserService`),
+  booleans are predicates (`isReady`, `hasParent`).
+- Comments explain **why**, not what. The code shows the what.
+- Errors surface at module boundaries; don't catch-and-ignore.
+- No silent fallbacks that mask the real failure mode.
+- No debug leftovers (`console.log`, `print(...)`, `dump`, `debugger`) in
+  committed code unless routed through the project's logger.
+- One env-access module per project. No scattered `process.env.X` reads.
+- Soft ceilings: files ≤ 200 lines, functions ≤ 50 lines. Refactor if
+  you breach either, unless there's a real reason not to.
+
+Deeper guidance + examples → `docs/code-quality.md`.
+
+---
+
+## Anti-patterns
+
+- Casting your way out of a type error with `as any` / `cast(Any, x)`.
+- Adding a try/except (or try/catch) that logs and continues, hiding the
+  bug from callers.
+- Hand-rolling validation when pydantic / zod / a schema would do it.
+- Reaching past a library's public API instead of asking for a feature.
+- "Cleanup" commits that bundle behaviour changes with refactors.
+- Disabling tests to make the suite green.
+- Inventing config flags for unimplemented behaviour.
+- Copy-pasting a block to avoid a small refactor.
+
+---
+
+## Communication style
+
+- Lead with the answer; context follows if needed.
+- Technical register; match the developer.
+- When asked for two things, do both — don't ask which one first unless
+  they genuinely conflict.
+- Cite file paths and line numbers when referring to code.
+
+---
+
+## Reference index
+
+| Topic | File |
 | --- | --- |
-| [code-style.md](./topics/code-style.md) | Writing or refactoring any code — naming, function shape, error handling, comments |
-| [security.md](./topics/security.md) | Auth, secrets, input validation, anything touching user data |
-| [accessibility.md](./topics/accessibility.md) | Generating any UI markup or interaction |
-| [performance.md](./topics/performance.md) | Anything user-perceivable — Core Web Vitals + API latency budgets |
-| [frontend.md](./topics/frontend.md) | React 19, Next.js 15, Tailwind v4, forms, state, images |
-| [backend.md](./topics/backend.md) | HTTP APIs, idempotency, observability, OAuth 2.1, rate limiting |
-| [database.md](./topics/database.md) | Schema, indexes, migrations (expand/contract), connection pooling |
-| [testing.md](./topics/testing.md) | What to test, fixtures, flaky-test diagnosis |
-| [architecture.md](./topics/architecture.md) | SOLID, layering, hexagonal, DDD-lite, ADRs |
-| [documentation.md](./topics/documentation.md) | READMEs, ADRs, when comments are appropriate |
-| [git-and-pr.md](./topics/git-and-pr.md) | Commits (Conventional Commits), branches, PR descriptions |
+| TypeScript standards | `docs/typescript.md` |
+| Python + FastAPI standards | `docs/python-fastapi.md` |
+| Verification + self-healing loop | `docs/verification.md` |
+| Security floor (rules and rationale) | `docs/security.md` |
+| Code quality: naming, comments, errors | `docs/code-quality.md` |
+| How to write `rules.yaml` (schema) | `docs/governance.md` |
+| How trueGate enforces governance | `docs/architecture.md` |
+| When governance behaves unexpectedly | `docs/troubleshooting.md` |
 
-### Component recipes — drop-in accessible UI patterns
+---
 
-| File | Use when |
-| --- | --- |
-| [forms.md](./components/forms.md) | Building a form (validation, error display, Server Action submission) |
-| [buttons.md](./components/buttons.md) | Any button — variants, icon buttons, loading states |
-| [data-display.md](./components/data-display.md) | Tables, lists, empty states, loading skeletons |
-| [navigation.md](./components/navigation.md) | Nav bars, breadcrumbs, tabs, command palette |
-| [feedback.md](./components/feedback.md) | Toasts, alerts, modals, status messages |
-
-### Design pattern templates
-
-| File | Use when |
-| --- | --- |
-| [error-handling.md](./patterns/error-handling.md) | Where to throw, where to catch, structured error responses |
-| [data-fetching.md](./patterns/data-fetching.md) | Server-first fetching, the four UI states, cache invalidation |
-| [state-management.md](./patterns/state-management.md) | Local vs URL vs server vs context vs store — decision tree |
-| [auth-boundaries.md](./patterns/auth-boundaries.md) | Where AuthN/AuthZ checks belong, defense in depth |
-
-### External authorities
-
-- [README.md](./references/README.md) — curated index of canonical sources (RFCs, MDN, OWASP, framework docs)
-
-## Always (the operator-wide floor)
-
-These apply everywhere; don't bother re-reading a topic file to confirm them:
-
-- **Never embed credentials, API keys, tokens, or private hostnames** in code, comments, or config files committed to git
-- **Never generate destructive shell commands** (`rm -rf /`, `format c:`, `mkfs`, `dd if=/dev/zero`) — trueGate blocks these, but they should never even be suggested
-- **Never disable TLS verification** (`rejectUnauthorized: false`, `verify=False`, `-k`) in production paths
-- **Authorization checks at the boundary, always.** No early returns "for performance" that skip an authz check
-- **Treat all external input as untrusted** — URL params, headers, request bodies, file contents, env vars from third parties
-- **No `eval()`, `new Function()`**, or arbitrary code execution from input
-- **No silent fallbacks** that mask real errors
-
-## Style floor
-
-- **Names**: functions are verbs (`parseConfig`), classes are nouns (`UserStore`), booleans are predicates (`isReady`)
-- **Comments explain WHY, not WHAT.** Code shows what; comments explain hidden constraints
-- **One env-access module per project.** No sprinkling `process.env.X` across the codebase
-- **Reject `any` / `dynamic` / `interface{}`** outside well-justified boundaries
-- See [code-style.md](./topics/code-style.md) for the full set
-
-## Definition of Done (operator-wide minimum)
-
-A change is complete when:
-
-- Types pass (`tsc`, `mypy --strict`, `go build`, equivalents)
-- Tests that cover the change pass
-- No secrets, hardcoded credentials, or private hostnames committed
-- No debug leftovers (`console.log`, `print(...)`, `dump`) unless intentional and routed through the project's logger
-- No new lint or formatter errors
-- Documentation updated when behavior visibly changed
-- Sentrux gate clean if Sentrux is configured in this project
-
-## Communication style (when responding to me)
-
-- Get to the answer in the first sentence. No throat-clearing.
-- One short update at the start of significant tool work, not narration of every step.
-- For one-line commands: just give the command. Don't wrap it in three paragraphs of context.
-- Match my register: technical, direct, no emoji unless I use one first.
-- If I ask for two things, do both. Don't ask which one first unless they conflict.
-
-## When in doubt
-
-1. Check the relevant `topics/*.md` file
-2. Check `~/.truegate/references/README.md` for the canonical external source
-3. Ask before guessing
-
-— trueGate operator policy v1
+_trueGate shipped default. Customize by running `truegate global-init`,
+which scaffolds `.state/governance.md` for your team. Every file in this
+governance system is capped at 200 lines._

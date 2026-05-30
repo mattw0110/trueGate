@@ -44,11 +44,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function alreadyMarked(text: string, marker: string): boolean {
   if (!marker) return false;
   const trimmed = text.trimEnd();
-  if (trimmed.endsWith(marker.trim())) return true;
-  // The marker now carries a `· <provider>/<model>` suffix per-request. The
-  // model may echo the base marker (e.g. "— trueGate") from prior turns
-  // without the suffix; treat that as already-marked to avoid stacking.
-  const base = marker.split(' · ')[0]?.trim() ?? '';
+  const trimmedMarker = marker.trim();
+  if (trimmed.endsWith(trimmedMarker)) return true;
+  // The suffix is now multi-line: "— trueGate · provider/model\nGovernance: …".
+  // Models often echo back only the marker line from prior turns (without the
+  // governance note that follows). Check each non-empty line of the suffix
+  // independently so the echoed marker is recognized.
+  const lines = trimmedMarker
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  for (const line of lines) {
+    if (trimmed.endsWith(line)) return true;
+  }
+  // Also recognize text ending with the bare "— trueGate" base (model echoed
+  // the marker without the provider/model suffix).
+  const base = (lines[0] ?? trimmedMarker).split(' · ')[0]?.trim() ?? '';
   if (base && trimmed.endsWith(base)) return true;
   return false;
 }
@@ -236,7 +247,7 @@ function applyGovernanceAndMarker(
       };
     }
     if (result.severity === 'warn') {
-      const note = governanceNote(marker, true, 'warn');
+      const note = governanceNote(marker, true, 'warn', { issues: result.issues });
       const fullMarker = note ? `${marker}\n${note}` : marker;
       const suffix = formatWarnings(result) + (fullMarker ? `\n\n${fullMarker}` : '');
       return {
@@ -255,7 +266,12 @@ function applyGovernanceAndMarker(
   }
 
   if (!marker) return response;
-  const note = governanceNote(marker, !!context, 'pass');
+  const note = governanceNote(
+    marker,
+    !!context,
+    'pass',
+    context ? { ruleCount: context.rules.dangerousPatterns.length } : {},
+  );
   const suffix = markerWithNote(marker, note);
   return {
     ...response,

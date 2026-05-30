@@ -2,16 +2,23 @@ import { checkDangerousPatterns } from '../rules/dangerous-patterns.js';
 import { checkForbiddenDependencies } from '../rules/forbidden-dependencies.js';
 import { checkForbiddenFrameworks } from '../rules/forbidden-frameworks.js';
 import { checkTypescriptRules } from '../rules/typescript-rules.js';
+import { checkUnverifiedClaims } from '../rules/unverified-claims.js';
 import { buildValidationResult } from './validation-result.js';
 import type { ValidationResult } from '../../types/validation.js';
 import type { RuleSet } from '../../types/governance.js';
+import type { ChatMessage } from '../../types/providers.js';
 
-export function validateResponse(content: string, rules: RuleSet): ValidationResult {
+export function validateResponse(
+  content: string,
+  rules: RuleSet,
+  priorMessages: ChatMessage[] = [],
+): ValidationResult {
   const issues = [
     ...checkDangerousPatterns(content, rules.dangerousPatterns),
     ...checkForbiddenDependencies(content, rules.forbiddenDependencies),
     ...checkForbiddenFrameworks(content, rules.forbiddenFrameworks),
     ...checkTypescriptRules(content, rules.typescriptRules),
+    ...checkUnverifiedClaims(content, priorMessages),
   ];
 
   return buildValidationResult(issues);

@@ -42,7 +42,7 @@ validate the direction before you invest time in implementation.
 ### Setup
 
 ```bash
-git clone <your-fork> trueGate
+git clone https://github.com/<your-username>/trueGate.git
 cd trueGate
 npm install
 ```

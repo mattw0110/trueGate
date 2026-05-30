@@ -1,5 +1,6 @@
 import { DEFAULT_RESPONSE_MARKER } from '../../config/constants.js';
 import type { TrueGateConfig } from '../../types/runtime.js';
+import type { ValidationIssue } from '../../types/validation.js';
 
 /**
  * Resolve the marker string for a given config.
@@ -41,15 +42,37 @@ export function appendMarker(text: string, marker: string): string {
   return text + markerSuffix(marker);
 }
 
+export interface GovernanceNoteContext {
+  /** Total number of dangerous-pattern rules loaded (for pass-case rule count). */
+  ruleCount?: number;
+  /** Validation issues from the current response (for warn-case detail). */
+  issues?: ValidationIssue[];
+  /** Bundle source label, e.g. 'data' or '.state' — appears in parentheses on pass. */
+  bundleSource?: string;
+}
+
+function summarizeIssues(issues: ValidationIssue[]): string {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const issue of issues) {
+    const label = (issue.match ?? issue.message).trim();
+    const truncated = label.length > 40 ? label.slice(0, 37) + '...' : label;
+    if (seen.has(truncated)) continue;
+    seen.add(truncated);
+    labels.push(truncated);
+    if (labels.length >= 3) break;
+  }
+  const more = issues.length > labels.length ? ` +${issues.length - labels.length} more` : '';
+  return labels.join('; ') + more;
+}
+
 /**
  * Build the governance note that appears on the line immediately after the
- * trueGate marker, telling the operator what governance did on this request.
+ * trueGate marker. Communicates what governance did on this specific request:
  *
- *   — trueGate · cliproxy/gpt-5.5
- *   Governance: operator bundle
- *
- *   — trueGate · cliproxy/claude-sonnet-4-5
- *   Governance: ⚠ policy applied
+ *   Governance: operator bundle · 28 rules, clean
+ *   Governance: ⚠ 2 warning(s) · `: any`; console.log left in code
+ *   Governance: operator bundle (.state override) · 28 rules, clean
  *
  * Returns '' when the marker is suppressed or no context was loaded.
  */
@@ -57,10 +80,22 @@ export function governanceNote(
   marker: string,
   contextActive: boolean,
   severity: 'pass' | 'warn' | 'block' | undefined,
+  detail: GovernanceNoteContext = {},
 ): string {
   if (!marker || !contextActive) return '';
-  if (severity === 'warn') return 'Governance: ⚠ policy applied';
-  return 'Governance: operator bundle';
+
+  const sourceTag = detail.bundleSource ? ` (${detail.bundleSource})` : '';
+
+  if (severity === 'warn') {
+    const issues = detail.issues ?? [];
+    if (issues.length === 0) return 'Governance: ⚠ policy applied';
+    const summary = summarizeIssues(issues);
+    const count = issues.length;
+    return `Governance: ⚠ ${count} warning${count === 1 ? '' : 's'} · ${summary}`;
+  }
+
+  const tail = typeof detail.ruleCount === 'number' ? ` · ${detail.ruleCount} rules, clean` : '';
+  return `Governance: operator bundle${sourceTag}${tail}`;
 }
 
 /**

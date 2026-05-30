@@ -27,7 +27,31 @@ describe('checkDangerousPatterns', () => {
   });
 
   it('uses extra patterns from rules.yaml', () => {
-    const issues = checkDangerousPatterns('DO NOT DEPLOY', ['DO NOT DEPLOY']);
+    const issues = checkDangerousPatterns('DO NOT DEPLOY', [
+      { pattern: 'DO NOT DEPLOY', severity: 'block' },
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.severity).toBe('block');
+  });
+
+  it('respects declared severity for extra patterns', () => {
+    const issues = checkDangerousPatterns('let x: any = 1', [
+      { pattern: ': any\\b', severity: 'warn', message: 'no any' },
+    ]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.severity).toBe('warn');
+    expect(issues[0]?.message).toBe('no any');
+  });
+
+  it('extra patterns are case-sensitive by default', () => {
+    const issues = checkDangerousPatterns('x: Any', [{ pattern: ': any\\b', severity: 'warn' }]);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('extra patterns honor (?i) prefix for case-insensitive matching', () => {
+    const issues = checkDangerousPatterns('Bearer abcdefghijklmnopqrstuvwxyz', [
+      { pattern: '(?i)bearer\\s+[a-z0-9]{20,}', severity: 'block' },
+    ]);
     expect(issues).toHaveLength(1);
   });
 });

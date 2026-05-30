@@ -5,7 +5,7 @@ import type { GovernanceFile } from '../../src/types/governance.js';
 
 const makeFile = (content: string): GovernanceFile => ({
   source: 'global',
-  sourcePath: '/home/test/.truegate',
+  sourcePath: '/home/test/trueGate/data/governance.md',
   content,
 });
 
@@ -40,7 +40,7 @@ describe('buildRuntimeContext', () => {
   it('global rules.yaml drives forbiddenDependencies', () => {
     const rulesFile: GovernanceFile = {
       source: 'global',
-      sourcePath: '/home/test/.truegate',
+      sourcePath: '/home/test/trueGate/data/governance.md',
       content: '',
       frontMatter: {
         rules: {

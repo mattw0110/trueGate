@@ -1,10 +1,10 @@
-import type { GovernanceFile, RuleSet } from '../../types/governance.js';
+import type { DangerousPattern, GovernanceFile, RuleSet } from '../../types/governance.js';
 import { RulesYamlSchema } from '../schemas/rules-schema.js';
 
 /**
- * trueGate is operator-wide only — `~/.truegate/` is the single source.
- * `resolveSourceOrder` is preserved as a no-op identity for callers that
- * still expect a sorted list.
+ * trueGate is operator-wide only — `<repo>/data/` (with `<repo>/.state/`
+ * overrides) is the single source. `resolveSourceOrder` is preserved as a
+ * no-op identity for callers that still expect a sorted list.
  */
 export function resolveSourceOrder(files: GovernanceFile[]): GovernanceFile[] {
   return [...files];
@@ -34,8 +34,13 @@ export function extractRules(files: GovernanceFile[]): RuleSet {
     base.forbiddenFrameworks.push(...r.forbiddenFrameworks);
 
     for (const p of r.dangerousPatterns) {
-      if (typeof p === 'string') base.dangerousPatterns.push(p);
-      else base.dangerousPatterns.push(p.pattern);
+      if (typeof p === 'string') {
+        base.dangerousPatterns.push({ pattern: p, severity: 'block' });
+      } else {
+        const entry: DangerousPattern = { pattern: p.pattern, severity: p.severity };
+        if (p.message !== undefined) entry.message = p.message;
+        base.dangerousPatterns.push(entry);
+      }
     }
 
     base.typescriptRules = {
@@ -46,7 +51,12 @@ export function extractRules(files: GovernanceFile[]): RuleSet {
 
   base.forbiddenDependencies = Array.from(new Set(base.forbiddenDependencies));
   base.forbiddenFrameworks = Array.from(new Set(base.forbiddenFrameworks));
-  base.dangerousPatterns = Array.from(new Set(base.dangerousPatterns));
+  const seen = new Set<string>();
+  base.dangerousPatterns = base.dangerousPatterns.filter((p) => {
+    if (seen.has(p.pattern)) return false;
+    seen.add(p.pattern);
+    return true;
+  });
 
   return base;
 }

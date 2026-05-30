@@ -118,7 +118,12 @@ export function registerResponsesRoute(
       });
     }
 
-    const note = governanceNote(marker, !!context, context ? 'pass' : undefined);
+    const note = governanceNote(
+      marker,
+      !!context,
+      context ? 'pass' : undefined,
+      context ? { ruleCount: context.rules.dangerousPatterns.length } : {},
+    );
     const fullMarker = note ? `${marker}\n${note}` : marker;
 
     if (!context) {
@@ -138,7 +143,7 @@ export function registerResponsesRoute(
     }
 
     if (result.severity === 'warn') {
-      const warnNote = governanceNote(marker, true, 'warn');
+      const warnNote = governanceNote(marker, true, 'warn', { issues: result.issues });
       const warnMarker = warnNote ? `${marker}\n${warnNote}` : marker;
       const original = extractResponsesText(upstreamResponse);
       const warnedText = appendMarker(original + formatWarnings(result), warnMarker);

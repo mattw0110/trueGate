@@ -11,6 +11,7 @@ Get trueGate running in **3 minutes**.
 └─────────────┘            └─────────────┘            └────────────────┘
 ```
 
+trueGate is installed **once**, wherever you like, and runs continuously as your personal AI governance layer. It covers every IDE and every AI tool on your machine — no per-project setup, nothing added to your repos.
 
 ---
 
@@ -35,6 +36,9 @@ alias truegate="node ~/trueGate/dist/cli/index.cjs"
 
 ## 2. Configure your provider
 
+```bash
+truegate setup
+```
 
 The wizard asks which upstream you want ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), OpenAI, Anthropic, Ollama, LM Studio, GitHub Copilot, or a custom URL) and saves the answer to `.state/config.json` inside the trueGate folder. Nothing is written anywhere else on your machine.
 
@@ -57,7 +61,7 @@ trueGate proxy listening on http://localhost:8457
   → governance: bundled defaults (data/) + operator overrides (.state/)
 ```
 
-To force a specific upstream:
+To force a specific upstream instead of auto-detecting:
 
 ```bash
 truegate serve --provider cliproxy    # always use CLIProxyAPI
@@ -67,7 +71,6 @@ truegate serve --provider openai --token sk-...
 
 ---
 
-trueGate is installed **once**, wherever you like, and runs continuously as your personal AI governance layer. It covers every IDE and every AI tool on your machine — no per-project setup, nothing added to your repos.
 ## 4. Point your IDEs at trueGate
 
 Set all your AI tools to use `http://localhost:8457` as their base URL:
@@ -109,16 +112,12 @@ trueGate ships with sensible defaults in `data/`. To add your own rules:
 
 ```bash
 truegate global-init   # creates .state/governance.md + .state/rules.yaml
-truegate kb-init       # creates a full operator knowledge base in .state/
 ```
 
 Edit `.state/governance.md` in any text editor — changes take effect within 5 seconds, no restart needed. See [governance.md](./governance.md) for the full schema.
 
 ---
 
-```bash
-truegate setup
-```
 ## Run as a background service
 
 Start trueGate once and forget about it.

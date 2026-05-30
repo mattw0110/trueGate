@@ -12,7 +12,7 @@ import type { GovernanceFile } from '../../types/governance.js';
  * Load operator-wide governance. Resolution order:
  *
  *   1. `<repo>/.state/governance.md` + `<repo>/.state/rules.yaml`
- *      — operator customizations, populated by `truegate kb-init` / `global-init`.
+ *      — operator customizations, populated by `truegate global-init`.
  *   2. `<repo>/data/governance.md` + `<repo>/data/rules.yaml`
  *      — shipped defaults, tracked in git.
  *

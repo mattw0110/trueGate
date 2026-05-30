@@ -1,6 +1,6 @@
 # trueGate
 
-> Local-first governance proxy for AI coding tools. Operator-wide guidance + response validation, layered under each project's own conventions. Never modifies your project repos.
+> Self-contained governance proxy for AI coding tools. Routes requests by model name, injects operator-wide guidance, and validates responses — all from a single folder. Never touches your project repos.
 
 ```
 ┌──────────────┐   ┌────────────┐   ┌───────────────┐
@@ -14,7 +14,7 @@
 ## What it does
 
 - **Auto-routes by model name — start with no flags.** trueGate probes every reachable upstream ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), Ollama, LM Studio, OpenAI, Anthropic, GitHub Copilot) at startup and dispatches each request to the right backend automatically.
-- **Operator-wide governance** — ships with a governance bundle in `data/`. Override it with your own files in `.state/`. **Never touches dev project directories.**
+- **Operator-wide governance — ships with a governance bundle in data/.** Override it with your own files in `.state/`.
 - **Response validation** — blocks dangerous output (`rm -rf /`, leaked `sk-` keys, `DROP TABLE`, pipe-to-shell) and warns on policy drift (forbidden deps, `any` types).
 - **Tool-call aware** — scans `tool_use.input` and `function_call.arguments`, not just plain text.
 - **Every major API** — `/v1/messages` (Claude Code, Anthropic SDK), `/v1/chat/completions` (Cursor, OpenAI SDK, Continue.dev), `/v1/responses` (Codex CLI). **Agent Zero envelope requests handled natively.**
@@ -24,7 +24,7 @@
 ## Quickstart
 
 ```bash
-git clone <repo> trueGate && cd trueGate
+git clone https://github.com/mattw0110/trueGate.git && cd trueGate
 npm install && npm run build
 
 # Configure provider + token (writes .state/config.json)
@@ -49,8 +49,7 @@ trueGate proxy listening on http://localhost:8457
 | Command | What it does |
 | --- | --- |
 | `truegate setup` | Interactive wizard. Writes `.state/config.json`. |
-| `truegate global-init` | Create minimal operator governance in `.state/`. |
-| `truegate kb-init` | Scaffold the full operator knowledge base in `.state/`. |
+| `truegate global-init` | Create operator governance overrides in `.state/`. |
 | `truegate serve [flags]` | Start proxy with auto-upstream detection. |
 | `truegate ide <name>` | Print copy-paste setup for an IDE. |
 | `truegate status` | Proxy health + full upstream registry. |
@@ -89,7 +88,6 @@ trueGate/
 
 ```bash
 truegate global-init   # writes .state/governance.md + .state/rules.yaml
-truegate kb-init       # writes a full operator knowledge base to .state/
 truegate inspect       # see exactly what's loaded
 ```
 

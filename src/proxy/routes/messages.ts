@@ -129,7 +129,7 @@ export function registerMessagesRoute(
 
     if (result.severity === 'warn') {
       const original = extractAnthropicText(response);
-      const warnNote = governanceNote(marker, true, 'warn');
+      const warnNote = governanceNote(marker, true, 'warn', { issues: result.issues });
       const warnMarker = warnNote ? `${marker}\n${warnNote}` : marker;
       const warned: AnthropicNativeResponse = {
         ...response,
@@ -141,7 +141,9 @@ export function registerMessagesRoute(
       return reply.send(warned);
     }
 
-    const note = governanceNote(marker, true, 'pass');
+    const note = governanceNote(marker, true, 'pass', {
+      ruleCount: context.rules.dangerousPatterns.length,
+    });
     const fullMarker = note ? `${marker}\n${note}` : marker;
     return reply.send({
       ...response,

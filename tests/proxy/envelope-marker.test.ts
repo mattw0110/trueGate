@@ -189,4 +189,56 @@ describe('chat-completions: model returns Agent Zero envelope natively', () => {
     const occurrences = (parsed.tool_args.text.match(/— trueGate/g) ?? []).length;
     expect(occurrences).toBe(1);
   });
+
+  it('does not double-mark when the model echoed a full provider/model marker line', async () => {
+    // The upstream model echoed a full marker like "— trueGate · openai/gpt-4o"
+    // from a prior turn — without the trailing Governance note. The fresh
+    // suffix would otherwise be appended on top, stacking two marker lines.
+    const modelEnvelope = JSON.stringify({
+      thoughts: ['t'],
+      headline: 'h',
+      tool_name: 'response',
+      tool_args: { text: 'Done with the task.\n\n— trueGate · openai/gpt-4o' },
+    });
+
+    mockAgent
+      .get(OPENAI_HOST)
+      .intercept({ path: '/v1/chat/completions', method: 'POST' })
+      .reply(
+        200,
+        JSON.stringify({
+          id: 'x',
+          object: 'chat.completion',
+          created: 1,
+          model: 'gpt-4o',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: modelEnvelope },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+
+    const server = buildServer(cfg());
+    const resp = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'go' }],
+      }),
+    });
+
+    const outer = resp.json<{ choices: Array<{ message: { content: string } }> }>();
+    const parsed = JSON.parse(outer.choices[0]?.message.content ?? '{}') as {
+      tool_args: { text: string };
+    };
+    // Only one trueGate marker line should appear.
+    const occurrences = (parsed.tool_args.text.match(/— trueGate/g) ?? []).length;
+    expect(occurrences).toBe(1);
+  });
 });

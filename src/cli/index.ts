@@ -7,7 +7,6 @@ import { runIde } from './commands/ide.js';
 import { runStatus } from './commands/status.js';
 import { runGlobalInit } from './commands/global-init.js';
 import { runLogin } from './commands/login.js';
-import { runKbInit } from './commands/kb-init.js';
 
 const program = new Command();
 
@@ -17,19 +16,9 @@ program
   .version('0.1.0');
 
 program
-  .command('kb-init')
-  .description(
-    'Scaffold the operator knowledge base into ~/.truegate/ (governance.md index + topics/, components/, patterns/, references/). 25 dense reference files covering frontend, backend, security, testing, architecture, and more. Operator-wide; never written into a project folder.',
-  )
-  .option('--force', 'Overwrite existing files')
-  .action(async (options: { force?: boolean }) => {
-    await runKbInit(options);
-  });
-
-program
   .command('global-init')
   .description(
-    'Initialize operator-wide governance at ~/.truegate/governance.md + rules.yaml (applies to every project)',
+    'Initialize a minimal operator governance scaffold at .state/governance.md + .state/rules.yaml',
   )
   .option('--force', 'Overwrite existing files')
   .action(async (options: { force?: boolean }) => {
@@ -47,7 +36,7 @@ program
 
 program
   .command('setup')
-  .description('Interactive wizard — write provider, keys, and port to ~/.truegate/config.json')
+  .description('Interactive wizard — write provider, keys, and port to .state/config.json')
   .action(async () => {
     await runSetup();
   });
@@ -86,7 +75,7 @@ program
 
 program
   .command('inspect')
-  .description('Print the operator-wide governance context loaded from ~/.truegate/')
+  .description('Print the operator-wide governance context (bundled defaults + .state/ overrides)')
   .action(async () => {
     await runInspect();
   });

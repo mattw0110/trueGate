@@ -9,6 +9,28 @@ Together: **prompt-time guidance + output-time enforcement**.
 
 ---
 
+## Layered system
+
+trueGate's governance is organized in two tiers, with operator state on top:
+
+1. **Master files** (always loaded into every request, ≤200 lines each):
+
+- `data/governance.md` — prose rules + a topic index pointing at `docs/`.
+- `data/rules.yaml` — pattern enforcement on every response.
+
+2. **Topic reference files** in `docs/` (≤200 lines each, read on demand):
+   `typescript.md`, `python-fastapi.md`, `verification.md`, `security.md`,
+   `code-quality.md`. The master file points at these; an AI agent with
+   file access (or a human operator) reads the relevant one when needed.
+3. **Operator state** in `.state/governance.md` and `.state/rules.yaml`
+   replaces the shipped masters when present (never merged).
+
+Every file in this system honors a **200-line ceiling**, with no exceptions.
+That cap keeps the always-injected context small and forces topics to
+stay focused.
+
+---
+
 ## File locations
 
 trueGate is self-contained. Governance files live inside the repo — nothing is read from your dev project directories.
@@ -31,11 +53,8 @@ The proxy caches compiled governance for **5 seconds**. Edit a file and the next
 The shipped `data/` defaults are a reasonable starting point. To customize:
 
 ```bash
-# Minimal scaffold — writes .state/governance.md + .state/rules.yaml
+# Writes .state/governance.md + .state/rules.yaml for you to edit
 truegate global-init
-
-# Full operator knowledge base — writes .state/ with topics/, components/, patterns/, references/
-truegate kb-init
 ```
 
 Verify what's currently loaded:

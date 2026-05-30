@@ -30,7 +30,7 @@ enforced everywhere, regardless of which repo trueGate is serving.
 const DEFAULT_GLOBAL_RULES_YAML = `version: "1"
 
 # These apply on TOP of every project's rules — they cannot be disabled
-# by a project's local .truegate/rules.yaml.
+# by anything outside this trueGate repo.
 
 forbiddenDependencies: []
 
