@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="trueGate logo" width="200" />
+</p>
+
 # trueGate
 
 > Self-contained governance proxy for AI coding tools. Routes requests by model name, injects operator-wide guidance, and validates responses — all from a single folder. Never touches your project repos.
