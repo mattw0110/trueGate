@@ -46,21 +46,21 @@ function alreadyMarked(text: string, marker: string): boolean {
   const trimmed = text.trimEnd();
   const trimmedMarker = marker.trim();
   if (trimmed.endsWith(trimmedMarker)) return true;
-  // The suffix is now multi-line: "— trueGate · provider/model\nGovernance: …".
-  // Models often echo back only the marker line from prior turns (without the
-  // governance note that follows). Check each non-empty line of the suffix
-  // independently so the echoed marker is recognized.
+  // The suffix is multi-line: "— trueGate · provider/model\nGovernance: …".
+  // Models echo prior-turn footers in many shapes — sometimes just the marker
+  // line, sometimes both lines, sometimes the governance note with a *different*
+  // rule count than the current one. Look at the tail of the content for the
+  // base marker token ("— trueGate"): if it appears in the trailing region, the
+  // footer is already present in some form and we must not append a second one.
   const lines = trimmedMarker
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean);
-  for (const line of lines) {
-    if (trimmed.endsWith(line)) return true;
-  }
-  // Also recognize text ending with the bare "— trueGate" base (model echoed
-  // the marker without the provider/model suffix).
   const base = (lines[0] ?? trimmedMarker).split(' · ')[0]?.trim() ?? '';
-  if (base && trimmed.endsWith(base)) return true;
+  if (base) {
+    const tail = trimmed.slice(-Math.max(base.length + 200, 256));
+    if (tail.includes(base)) return true;
+  }
   return false;
 }
 
