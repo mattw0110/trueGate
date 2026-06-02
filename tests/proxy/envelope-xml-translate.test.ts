@@ -154,6 +154,73 @@ describe('chat-completions: Claude Code XML → Agent Zero envelope', () => {
     expect(envelope.tool_args.code).toBe('ls -la /tmp');
   });
 
+  it('translates Claude operator execute_plugin XML into an Agent Zero tool call', async () => {
+    mockUpstream(
+      `I'll check the project.\n<answer_operator>\n<execute_plugin>\n<name>code_execution_tool</name>\n<args>\n<runtime>terminal</runtime>\n<session>0</session>\n<reset>false</reset>\n<code><![CDATA[pwd && git status --short]]></code>\n</args>\n</execute_plugin>\n</answer_operator>`,
+    );
+
+    const server = buildServer(cfg());
+    const resp = await callEnvelope(server);
+    const envelope = JSON.parse(
+      resp.json<{ choices: Array<{ message: { content: string } }> }>().choices[0]?.message
+        .content ?? '{}',
+    ) as { tool_name: string; tool_args: Record<string, unknown> };
+
+    expect(envelope.tool_name).toBe('code_execution_tool');
+    expect(envelope.tool_args.runtime).toBe('terminal');
+    expect(envelope.tool_args.code).toBe('pwd && git status --short');
+    expect(envelope.tool_args.reset).toBe(false);
+  });
+
+  it('normalizes direct code_execution_tool command args from Claude XML', async () => {
+    mockUpstream(
+      `<function_calls>\n<invoke name="code_execution_tool">\n<parameter name="command">pwd</parameter>\n</invoke>\n</function_calls>`,
+    );
+
+    const server = buildServer(cfg());
+    const resp = await callEnvelope(server);
+    const envelope = JSON.parse(
+      resp.json<{ choices: Array<{ message: { content: string } }> }>().choices[0]?.message
+        .content ?? '{}',
+    ) as { tool_name: string; tool_args: Record<string, unknown> };
+
+    expect(envelope.tool_name).toBe('code_execution_tool');
+    expect(envelope.tool_args.runtime).toBe('terminal');
+    expect(envelope.tool_args.code).toBe('pwd');
+  });
+
+  it('translates fenced YAML tool calls emitted by Claude into an Agent Zero envelope', async () => {
+    mockUpstream(
+      `I'll open a browser tab now.\n\n\`\`\`yaml\ntool: browser\nargs:\n  action: new\n\`\`\``,
+    );
+
+    const server = buildServer(cfg());
+    const resp = await callEnvelope(server);
+    const envelope = JSON.parse(
+      resp.json<{ choices: Array<{ message: { content: string } }> }>().choices[0]?.message
+        .content ?? '{}',
+    ) as { tool_name: string; tool_args: Record<string, unknown> };
+
+    expect(envelope.tool_name).toBe('browser');
+    expect(envelope.tool_args.action).toBe('open');
+  });
+
+  it('maps invented browser_action envelopes to Agent Zero browser open', async () => {
+    mockUpstream(
+      `{"thoughts":["open browser"],"headline":"Opening browser","tool_name":"browser_action","tool_args":{"action":"launch"}}`,
+    );
+
+    const server = buildServer(cfg());
+    const resp = await callEnvelope(server);
+    const envelope = JSON.parse(
+      resp.json<{ choices: Array<{ message: { content: string } }> }>().choices[0]?.message
+        .content ?? '{}',
+    ) as { tool_name: string; tool_args: Record<string, unknown> };
+
+    expect(envelope.tool_name).toBe('browser');
+    expect(envelope.tool_args.action).toBe('open');
+  });
+
   it('maps Claude Code Edit to agent-zero text_editor str_replace', async () => {
     mockUpstream(
       `<function_calls>\n<invoke name="Edit">\n<parameter name="file_path">/tmp/x.py</parameter>\n<parameter name="old_string">foo</parameter>\n<parameter name="new_string">bar</parameter>\n</invoke>\n</function_calls>`,

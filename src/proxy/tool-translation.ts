@@ -104,6 +104,7 @@ type CanonicalAdapter = (args: Record<string, unknown>) => {
 
 const TEXT_EDITOR_TOOL_NAMES = ['text_editor', 'text_editor_remote'] as const;
 const CODE_EXECUTION_TOOL_NAMES = ['code_execution_tool', 'code_execution_remote'] as const;
+const BROWSER_TOOL_NAMES = ['browser'] as const;
 const LIVE_AGENT_ZERO_TOOLS = [
   'a2a_chat',
   'behaviour_adjustment',
@@ -218,6 +219,10 @@ const ADAPTERS: Record<string, CanonicalAdapter> = {
     args: { query: str(a.query) ?? str(a.q) ?? '' },
   }),
   web_search: (a) => ADAPTERS.websearch!(a),
+
+  // Browser aliases ──────────────────────────────────────────────────
+  browser_action: (a) => browserAdapter(a),
+  open_browser: (a) => browserAdapter(a),
 
   // Subagent dispatch — Claude Code's Task/Agent → agent-zero's call_subordinate
   task: (a) => taskAdapter(a),
@@ -334,6 +339,13 @@ function multiEditAdapter(a: Record<string, unknown>) {
   };
 }
 
+function browserAdapter(a: Record<string, unknown>) {
+  return {
+    name: 'browser',
+    args: normalizeBrowserArgs({ action: 'open', ...a }),
+  };
+}
+
 function taskAdapter(a: Record<string, unknown>) {
   // Claude Code Task: {description, prompt, subagent_type}
   // agent-zero call_subordinate: {message, reset, prompt?}
@@ -400,9 +412,33 @@ export function canonicalize(name: string, args: Record<string, unknown>): Canon
     if (TEXT_EDITOR_TOOL_NAMES.includes(lower as (typeof TEXT_EDITOR_TOOL_NAMES)[number])) {
       return { name: lower, args: normalizeTextEditorArgs(args), preface: '', originalName: name };
     }
+    if (CODE_EXECUTION_TOOL_NAMES.includes(lower as (typeof CODE_EXECUTION_TOOL_NAMES)[number])) {
+      return { name: lower, args: normalizeCodeExecutionArgs(args), preface: '', originalName: name };
+    }
+    if (BROWSER_TOOL_NAMES.includes(lower as (typeof BROWSER_TOOL_NAMES)[number])) {
+      return { name: lower, args: normalizeBrowserArgs(args), preface: '', originalName: name };
+    }
     return { name: lower, args, preface: '', originalName: name };
   }
   return { name, args, preface: '', originalName: name };
+}
+
+function normalizeCodeExecutionArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const code = str(args.code) ?? str(args.command) ?? str(args.cmd) ?? str(args.script);
+  if (!code) return args;
+  return {
+    ...args,
+    runtime: str(args.runtime) ?? 'terminal',
+    code,
+  };
+}
+
+function normalizeBrowserArgs(args: Record<string, unknown>): Record<string, unknown> {
+  const rawAction = (str(args.action) ?? str(args.operation) ?? '').toLowerCase();
+  if (!rawAction) return args;
+  const action =
+    rawAction === 'launch' || rawAction === 'new' || rawAction === 'new_tab' ? 'open' : rawAction;
+  return { ...args, action };
 }
 
 /**
@@ -642,6 +678,69 @@ export function parseXmlFunctionCall(content: string): CanonicalCall | null {
   }
 
   const preface = (content.split(/<function_calls>|<invoke /i)[0] ?? '').trim();
+  const canon = canonicalize(toolName, args);
+  return { ...canon, preface };
+}
+
+/** Parse Claude Code operator XML: <answer_operator><execute_plugin>… */
+export function parseAnswerOperatorPluginXml(content: string): CanonicalCall | null {
+  const pluginMatch = /<execute_plugin\b[^>]*>([\s\S]*?)<\/execute_plugin>/i.exec(content);
+  if (!pluginMatch || typeof pluginMatch[1] !== 'string') return null;
+
+  const pluginXml = pluginMatch[1];
+  const nameMatch = /<name\b[^>]*>([\s\S]*?)<\/name>/i.exec(pluginXml);
+  if (!nameMatch || typeof nameMatch[1] !== 'string') return null;
+  const toolName = nameMatch[1].trim();
+  if (!toolName) return null;
+
+  const argsMatch = /<args\b[^>]*>([\s\S]*?)<\/args>/i.exec(pluginXml);
+  const argsXml = typeof argsMatch?.[1] === 'string' ? argsMatch[1] : '';
+  const fieldRe = /<([a-zA-Z_][a-zA-Z0-9_]*)\b[^>]*>(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))<\/\1>/g;
+  const args: Record<string, unknown> = {};
+  let m: RegExpExecArray | null;
+  while ((m = fieldRe.exec(argsXml)) !== null) {
+    const key = m[1];
+    const rawValue = m[2] ?? m[3];
+    if (typeof key !== 'string' || typeof rawValue !== 'string') continue;
+    args[key] = coerceParam(rawValue.trim());
+  }
+
+  const preface = content.slice(0, pluginMatch.index).replace(/<answer_operator\b[^>]*>\s*/gi, '').trim();
+  const canon = canonicalize(toolName, args);
+  return { ...canon, preface };
+}
+
+/** Parse fenced YAML-ish tool calls like ```yaml\ntool: browser\nargs:\n  action: new\n```. */
+export function parseFencedYamlToolCall(content: string): CanonicalCall | null {
+  const fenceRe = /```(?:ya?ml)\s*\n([\s\S]*?)\n```/i;
+  const match = fenceRe.exec(content);
+  if (!match || typeof match[1] !== 'string') return null;
+
+  const yaml = match[1];
+  const lines = yaml.split(/\r?\n/);
+  let toolName = '';
+  const args: Record<string, unknown> = {};
+  let inArgs = false;
+
+  for (const line of lines) {
+    const toolMatch = /^tool:\s*["']?([^"'\n#]+?)["']?\s*(?:#.*)?$/.exec(line.trim());
+    if (toolMatch && typeof toolMatch[1] === 'string') {
+      toolName = toolMatch[1].trim();
+      inArgs = false;
+      continue;
+    }
+    if (/^args:\s*$/.test(line.trim())) {
+      inArgs = true;
+      continue;
+    }
+    if (!inArgs) continue;
+    const argMatch = /^\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*["']?([^"'\n#]*?)["']?\s*(?:#.*)?$/.exec(line);
+    if (!argMatch || typeof argMatch[1] !== 'string' || typeof argMatch[2] !== 'string') continue;
+    args[argMatch[1]] = coerceParam(argMatch[2].trim());
+  }
+
+  if (!toolName || Object.keys(args).length === 0) return null;
+  const preface = content.slice(0, match.index).trim();
   const canon = canonicalize(toolName, args);
   return { ...canon, preface };
 }
@@ -957,7 +1056,9 @@ export function parseUpstreamCall(message: ChatMessage | undefined): CanonicalCa
     parseAnthropicToolUse(message) ??
     (typeof message.content === 'string'
       ? (parseAgentZeroEnvelope(message.content) ??
+        parseAnswerOperatorPluginXml(message.content) ??
         parseXmlFunctionCall(message.content) ??
+        parseFencedYamlToolCall(message.content) ??
         parseExecuteCommandXml(message.content) ??
         parseToolAsTagXml(message.content) ??
         parseReadFilesXml(message.content) ??

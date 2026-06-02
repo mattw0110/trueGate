@@ -75,7 +75,7 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`trueGate proxy listening on http://localhost:${config.port}`);
-    console.log(`  → governance: ~/.truegate/ (operator-wide, global CLI)`);
+    console.log(`  → governance: data/ + .state/ (operator bundle, repo-local)`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);
