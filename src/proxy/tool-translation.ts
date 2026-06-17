@@ -660,6 +660,26 @@ export function parseDominantBashFence(content: string): CanonicalCall | null {
 
 /** Parse Claude Code's native <function_calls><invoke> XML. */
 export function parseXmlFunctionCall(content: string): CanonicalCall | null {
+  const jsonBlockMatch = /<function_calls>\s*([\s\S]*?)\s*<\/function_calls>/i.exec(content);
+  if (jsonBlockMatch && typeof jsonBlockMatch[1] === 'string') {
+    const rawBlock = jsonBlockMatch[1].trim();
+    if (rawBlock.startsWith('[') || rawBlock.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(rawBlock) as unknown;
+        const firstCall = Array.isArray(parsed) ? parsed[0] : parsed;
+        if (isRecord(firstCall) && typeof firstCall.tool_name === 'string') {
+          const { tool_name: toolName, tool_args: toolArgs, ...rest } = firstCall;
+          const args = isRecord(toolArgs) ? toolArgs : rest;
+          const preface = (content.split(/<function_calls>/i)[0] ?? '').trim();
+          const canon = canonicalize(toolName, args);
+          return { ...canon, preface };
+        }
+      } catch {
+        // Fall through to the XML invoke parser below.
+      }
+    }
+  }
+
   const invokeMatch = /<invoke\s+name="([^"]+)"\s*>([\s\S]*?)<\/invoke>/i.exec(content);
   if (!invokeMatch || typeof invokeMatch[1] !== 'string' || typeof invokeMatch[2] !== 'string') {
     return null;
@@ -680,6 +700,36 @@ export function parseXmlFunctionCall(content: string): CanonicalCall | null {
   const preface = (content.split(/<function_calls>|<invoke /i)[0] ?? '').trim();
   const canon = canonicalize(toolName, args);
   return { ...canon, preface };
+}
+
+export function parseBareJsonToolCall(content: string): CanonicalCall | null {
+  const trimmed = stripFences(content).trim();
+  const starts = [trimmed.indexOf('{'), trimmed.indexOf('[')].filter((index) => index >= 0);
+  if (starts.length === 0) return null;
+  const start = Math.min(...starts);
+
+  const end = findJsonValueEnd(trimmed.slice(start));
+  if (end < 0) return null;
+
+  const rawJson = trimmed.slice(start, start + end + 1);
+  const candidates = [rawJson, escapeControlCharsInsideJsonStrings(rawJson)];
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const firstCall = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!isRecord(firstCall) || typeof firstCall.tool_name !== 'string') continue;
+      const { tool_name: toolName, tool_args: toolArgs, ...rest } = firstCall;
+      const args = isRecord(toolArgs) ? toolArgs : rest;
+      const preface = trimmed.slice(0, start).trim();
+      const canon = canonicalize(toolName, args);
+      return { ...canon, preface };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
 }
 
 /** Parse Claude Code operator XML: <answer_operator><execute_plugin>… */
@@ -822,12 +872,105 @@ export function parseAgentZeroEnvelope(content: string): CanonicalCall | null {
   if (start !== -1 && end > start) candidates.add(unfenced.slice(start, end + 1));
   const balanced = extractBalancedJsonObject(unfenced);
   if (balanced) candidates.add(balanced);
+  const repaired = extractJsonObjectWithMissingTrailingClosers(unfenced);
+  if (repaired) candidates.add(repaired);
+  for (const candidate of Array.from(candidates)) {
+    const escapedControlChars = escapeControlCharsInsideJsonStrings(candidate);
+    if (escapedControlChars !== candidate) candidates.add(escapedControlChars);
+  }
   if (candidates.size === 0) return null;
   for (const slice of candidates) {
     const result = tryParseEnvelopeSlice(slice);
     if (result) return result;
   }
   return null;
+}
+
+function extractJsonObjectWithMissingTrailingClosers(input: string): string | null {
+  const start = input.indexOf('{');
+  if (start === -1) return null;
+
+  const stack: string[] = [];
+  let inString = false;
+  let escape = false;
+  let lastClose = -1;
+
+  for (let i = start; i < input.length; i++) {
+    const ch = input[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === '{') {
+      stack.push('}');
+    } else if (ch === '[') {
+      stack.push(']');
+    } else if (ch === '}' || ch === ']') {
+      if (stack.pop() !== ch) return null;
+      lastClose = i;
+      if (stack.length === 0) return null;
+    }
+  }
+
+  if (stack.length === 0 || lastClose === -1) return null;
+  return input.slice(start, lastClose + 1) + [...stack].reverse().join('');
+}
+
+function escapeControlCharsInsideJsonStrings(input: string): string {
+  let output = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+
+    if (escaped) {
+      output += ch;
+      escaped = false;
+      continue;
+    }
+
+    if (ch === '\\') {
+      output += ch;
+      escaped = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      output += ch;
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\n') {
+        output += '\\n';
+        continue;
+      }
+      if (ch === '\r') {
+        output += '\\r';
+        continue;
+      }
+      if (ch === '\t') {
+        output += '\\t';
+        continue;
+      }
+    }
+
+    output += ch;
+  }
+
+  return output;
 }
 
 function tryParseEnvelopeSlice(slice: string): CanonicalCall | null {
@@ -1058,6 +1201,7 @@ export function parseUpstreamCall(message: ChatMessage | undefined): CanonicalCa
       ? (parseAgentZeroEnvelope(message.content) ??
         parseAnswerOperatorPluginXml(message.content) ??
         parseXmlFunctionCall(message.content) ??
+        parseBareJsonToolCall(message.content) ??
         parseFencedYamlToolCall(message.content) ??
         parseExecuteCommandXml(message.content) ??
         parseToolAsTagXml(message.content) ??
@@ -1192,35 +1336,40 @@ export function translateResponseToConvention(
     const content = typeof message.content === 'string' ? message.content : '';
     // Belt-and-suspenders: if the strict parser missed but the content
     // still looks structurally like an envelope (tool_name + tool_args
-    // keys present), DON'T re-wrap. Double-wrapping turns the user's
-    // chat into escaped JSON. Forward the content verbatim instead.
+    // keys present), normalize it into a response envelope. Forwarding
+    // malformed envelope-shaped JSON makes Agent Zero see a broken contract.
     if (looksLikeAgentZeroEnvelopeShape(content)) {
       log?.(
         'warn',
-        `agent-zero: envelope-shaped content failed strict parse; forwarding verbatim to avoid double-wrap. ` +
+        `agent-zero: envelope-shaped content failed strict parse; wrapping as response text. ` +
           `content.length=${content.length}`,
       );
-      return response;
-    }
-    // Detect "plan-of-record" stalling: the model said what it'll do but didn't do it.
-    // Helps operators spot when the upstream is winding down mid-task vs giving a real answer.
-    if (looksLikePlanOfRecord(content)) {
+    } else if (looksLikePlanOfRecord(content)) {
+      // Detect "plan-of-record" stalling: the model said what it'll do but didn't do it.
+      // Helps operators spot when the upstream is winding down mid-task vs giving a real answer.
       log?.(
         'warn',
         `agent-zero: PLAN-OF-RECORD STALL detected. The upstream described next steps without ` +
           `emitting a tool call ("Let me…", "I'll…", "I need to…"). The agent loop will terminate ` +
           `as if this were a final answer. Consider re-prompting with explicit "execute the next step now".`,
       );
+    } else if (looksLikeRawStructuredOutput(content)) {
+      log?.(
+        'warn',
+        `agent-zero: RAW STRUCTURED OUTPUT detected. The upstream returned a bare JSON array/object ` +
+          `instead of the Agent Zero envelope; wrapping it as response text so the client can parse it.`,
+      );
+    } else {
+      // Full raw content dump so we can see WHY every parser missed.
+      // Truncated to 4 KB to keep journald sane.
+      const dump = content.length > 4096 ? content.slice(0, 4096) + '…[truncated]' : content;
+      log?.(
+        'warn',
+        `agent-zero envelope normalization fired: no parser matched. ` +
+          `content.length=${content.length}, type=${typeof message.content}. ` +
+          `RAW CONTENT BELOW (JSON-encoded so newlines/whitespace are visible):\n${JSON.stringify(dump)}`,
+      );
     }
-    // Full raw content dump so we can see WHY every parser missed.
-    // Truncated to 4 KB to keep journald sane.
-    const dump = content.length > 4096 ? content.slice(0, 4096) + '…[truncated]' : content;
-    log?.(
-      'warn',
-      `agent-zero envelope normalization fired: no parser matched. ` +
-        `content.length=${content.length}, type=${typeof message.content}. ` +
-        `RAW CONTENT BELOW (JSON-encoded so newlines/whitespace are visible):\n${JSON.stringify(dump)}`,
-    );
     return replaceFirstMessage(response, {
       role: 'assistant',
       content: emitAgentZeroEnvelope({
@@ -1276,8 +1425,67 @@ export function looksLikePlanOfRecord(content: string): boolean {
   if (/<function_calls>|<invoke /i.test(content)) return false;
   if (/^[\s]*\{[\s\S]*"tool_name"/.test(content)) return false;
   const stallStarter =
-    /(^|\n)\s*(let me|i'll|i will|i need to|first[, ]+i'll|first[, ]+let me|i'm going to|i am going to)\b/i;
+    /(^|\n)\s*(let me|i'll|i will|i need to|first[, ]+i'll|first[, ]+let me|i'm going to|i am going to|starting with|start(?:ing)? by|begin(?:ning)? by)\b/i;
   return stallStarter.test(content);
+}
+
+export function looksLikeRawStructuredOutput(content: string): boolean {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+
+  const jsonEnd = findJsonValueEnd(trimmed);
+  if (jsonEnd === -1) return false;
+
+  try {
+    const parsed = JSON.parse(trimmed.slice(0, jsonEnd + 1)) as unknown;
+    if (isRecord(parsed) && 'tool_name' in parsed && 'tool_args' in parsed) return false;
+    return Array.isArray(parsed) || isRecord(parsed);
+  } catch {
+    return false;
+  }
+}
+
+function findJsonValueEnd(input: string): number {
+  const first = input[0];
+  if (first !== '{' && first !== '[') return -1;
+
+  const stack: string[] = [first === '{' ? '}' : ']'];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 1; i < input.length; i += 1) {
+    const ch = input[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{') {
+      stack.push('}');
+      continue;
+    }
+    if (ch === '[') {
+      stack.push(']');
+      continue;
+    }
+    if (ch === '}' || ch === ']') {
+      if (stack.pop() !== ch) return -1;
+      if (stack.length === 0) return i;
+    }
+  }
+
+  return -1;
 }
 
 function replaceFirstMessage(

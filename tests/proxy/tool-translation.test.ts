@@ -333,18 +333,65 @@ describe('translateResponseToConvention', () => {
     expect(outer.tool_args.text).not.toMatch(/^\{"thoughts"/);
   });
 
-  it('agent-zero client + envelope-shaped content that fails strict parse → forwards verbatim, no double-wrap', () => {
+  it('agent-zero client + GPT envelope missing final brace before punctuation junk → recovers tool call', () => {
+    const inner = JSON.stringify({
+      thoughts: ['The user asked to use sequential thinking before code edits.'],
+      headline: 'Invoking sequential thinking',
+      tool_name: 'sequential_thinking.sequentialthinking',
+      tool_args: {
+        thought: 'Goal: fix content-readiness false positives.',
+        thoughtNumber: 1,
+        totalThoughts: 4,
+        nextThoughtNeeded: true,
+      },
+    });
+    const missingFinalBrace = inner.slice(0, -1);
+    const content = `${missingFinalBrace}((&___\n\n— trueGate · cliproxy/gpt-5.5`;
+    const r = translateResponseToConvention(res({ role: 'assistant', content }), 'agent-zero');
+    const outer = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: Record<string, unknown>;
+    };
+
+    expect(outer.tool_name).toBe('sequential_thinking.sequentialthinking');
+    expect(outer.tool_args.thoughtNumber).toBe(1);
+    expect(outer.tool_args.nextThoughtNeeded).toBe(true);
+  });
+
+  it('agent-zero client + envelope with raw newline in string → recovers intended envelope', () => {
     // Pathological case: an envelope-shaped string with a JSON-illegal byte
-    // (e.g. raw newline inside a string literal). The shape-detector
-    // short-circuits the wrap path so the operator sees the original content
-    // instead of escaped-JSON.
+    // (e.g. raw newline inside a string literal). Claude Code emits this often
+    // enough that trueGate should repair it instead of terminating the loop.
     const malformed =
       '{"thoughts":["t"],"headline":"h","tool_name":"response","tool_args":{"text":"line1\nline2"}}';
     const r = translateResponseToConvention(
       res({ role: 'assistant', content: malformed }),
       'agent-zero',
     );
-    expect(r.choices[0]!.message.content).toBe(malformed);
+    const outer = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { text: string };
+    };
+    expect(outer.tool_name).toBe('response');
+    expect(outer.tool_args.text).toBe('line1\nline2');
+  });
+
+  it('agent-zero client + malformed text_editor envelope with multiline edit text → recovers tool call', () => {
+    const malformed =
+      '{"thoughts":["editing"],"headline":"edit","tool_name":"text_editor","tool_args":{"action":"edit","path":"/tmp/x","old_text":"line1\nline2","new_text":"line1\nline changed"}}';
+    const r = translateResponseToConvention(
+      res({ role: 'assistant', content: malformed }),
+      'agent-zero',
+    );
+    const outer = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { action: string; path: string; old_text?: string; new_text?: string };
+    };
+    expect(outer.tool_name).toBe('text_editor');
+    expect(outer.tool_args.action).toBe('edit');
+    expect(outer.tool_args.path).toBe('/tmp/x');
+    expect(outer.tool_args.old_text).toBe('line1\nline2');
+    expect(outer.tool_args.new_text).toBe('line1\nline changed');
   });
 });
 
@@ -698,6 +745,10 @@ describe('looksLikePlanOfRecord', () => {
       ),
     ).toBe(true);
   });
+  it('flags "Starting with…" stall', async () => {
+    const { looksLikePlanOfRecord } = await import('../../src/proxy/tool-translation.js');
+    expect(looksLikePlanOfRecord('Starting with route source inspection now.')).toBe(true);
+  });
   it('does NOT flag genuine final answers', async () => {
     const { looksLikePlanOfRecord } = await import('../../src/proxy/tool-translation.js');
     expect(looksLikePlanOfRecord('The bug is on line 42 of foo.py — missing null check.')).toBe(
@@ -711,6 +762,67 @@ describe('looksLikePlanOfRecord', () => {
         `Let me check.\n<function_calls><invoke name="Read"><parameter name="file_path">/x</parameter></invoke></function_calls>`,
       ),
     ).toBe(false);
+  });
+});
+
+describe('looksLikeRawStructuredOutput', () => {
+  it('flags bare JSON arrays even after trueGate marker text', async () => {
+    const { looksLikeRawStructuredOutput } = await import('../../src/proxy/tool-translation.js');
+    expect(
+      looksLikeRawStructuredOutput(
+        `["client article creation", "XML sitemap"]\n\n— trueGate · cliproxy/gpt-5.4-mini`,
+      ),
+    ).toBe(true);
+  });
+
+  it('flags bare JSON objects but not Agent Zero envelopes', async () => {
+    const { looksLikeRawStructuredOutput } = await import('../../src/proxy/tool-translation.js');
+    expect(looksLikeRawStructuredOutput('{"memory":"x"}')).toBe(true);
+    expect(
+      looksLikeRawStructuredOutput(
+        '{"thoughts":["ok"],"headline":"h","tool_name":"response","tool_args":{"text":"done"}}',
+      ),
+    ).toBe(false);
+  });
+
+  it('logs raw structured output separately from unknown parser misses', () => {
+    const logs: Array<{ level: 'warn' | 'info'; msg: string }> = [];
+    const r = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: '["client article creation", "XML sitemap"]\n\n— trueGate · cliproxy/gpt-5.4-mini',
+      }),
+      'agent-zero',
+      (level, msg) => logs.push({ level, msg }),
+    );
+    const env = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { text: string };
+    };
+
+    expect(env.tool_name).toBe('response');
+    expect(env.tool_args.text).toContain('XML sitemap');
+    expect(logs.some((entry) => entry.msg.includes('RAW STRUCTURED OUTPUT'))).toBe(true);
+    expect(logs.some((entry) => entry.msg.includes('no parser matched'))).toBe(false);
+  });
+
+  it('translates bare JSON-array tool calls instead of wrapping them as response text', () => {
+    const r = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content:
+          '[{"tool_name":"text_editor","action":"view","path":"/a0/usr/projects/truemarketing/package.json"}]',
+      }),
+      'agent-zero',
+    );
+    const env = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { action: string; path: string };
+    };
+
+    expect(env.tool_name).toBe('text_editor');
+    expect(env.tool_args.action).toBe('view');
+    expect(env.tool_args.path).toBe('/a0/usr/projects/truemarketing/package.json');
   });
 });
 
@@ -825,6 +937,16 @@ describe('extractAdvertisedAgentZeroTools', () => {
 });
 
 describe('parseXmlFunctionCall (smoke)', () => {
+  it('extracts JSON-array function_calls emitted by Claude through Agent Zero', () => {
+    const c = parseXmlFunctionCall(
+      'Let me inspect it.\n<function_calls>[{"tool_name":"text_editor","action":"view","path":"/home/mwhite/projects/edm_source/src/pages/artists/[slug].astro"}]</function_calls>',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('view');
+    expect(c?.args.path).toBe('/home/mwhite/projects/edm_source/src/pages/artists/[slug].astro');
+    expect(c?.preface).toBe('Let me inspect it.');
+  });
+
   it('still extracts XML invoke + parameters', () => {
     const c = parseXmlFunctionCall(
       '<function_calls><invoke name="Write"><parameter name="file_path">/x</parameter><parameter name="content">hi</parameter></invoke></function_calls>',

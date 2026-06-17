@@ -47,6 +47,19 @@ function mockOpenAIResponse(content: string) {
   );
 }
 
+function headerValue(
+  headers: Record<string, string | string[]> | Array<string> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined;
+  if (Array.isArray(headers)) {
+    const idx = headers.findIndex((h) => h.toLowerCase() === name.toLowerCase());
+    return idx >= 0 ? headers[idx + 1] : undefined;
+  }
+  const value = headers[name] ?? headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
+}
+
 describe('proxy server', () => {
   it('passes through a clean response', async () => {
     mockOpenAIResponse('Here is a safe answer.');
@@ -163,6 +176,118 @@ describe('proxy server', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
     expect(body.choices[0]?.message.content).toContain('Governance Block');
+  });
+
+  it('keeps concurrent Agent Zero requests isolated', async () => {
+    const captured: Array<{
+      authorization: string | undefined;
+      model: string | undefined;
+      userText: string | undefined;
+      advertisedTools: string[];
+    }> = [];
+
+    const pool = mockAgent.get(OPENAI_HOST);
+    for (let i = 0; i < 3; i += 1) {
+      pool
+        .intercept({ path: '/v1/chat/completions', method: 'POST' })
+        .reply(
+          200,
+          (opts) => {
+            const body = JSON.parse(String(opts.body)) as {
+              model?: string;
+              messages?: Array<{ role: string; content: string }>;
+            };
+            const userText = body.messages?.find((m) => m.role === 'user')?.content;
+            const advertisedTools =
+              body.messages
+                ?.filter((m) => m.role === 'system')
+                .flatMap((m) => [...m.content.matchAll(/^###\s+([^\s:]+)/gm)].map((match) => match[1])) ??
+              [];
+
+            captured.push({
+              authorization: headerValue(
+                opts.headers as Record<string, string | string[]> | Array<string> | undefined,
+                'authorization',
+              ),
+              model: body.model,
+              userText,
+              advertisedTools,
+            });
+
+            return JSON.stringify({
+              id: `chatcmpl-${userText}`,
+              object: 'chat.completion',
+              created: 1234567890,
+              model: body.model,
+              choices: [
+                {
+                  index: 0,
+                  message: { role: 'assistant', content: `reply for ${userText}` },
+                  finish_reason: 'stop',
+                },
+              ],
+            });
+          },
+          { headers: { 'content-type': 'application/json' } },
+        );
+    }
+
+    const server = buildServer(testConfig());
+    const requests = ['agent-a', 'agent-b', 'agent-c'].map((agent, idx) =>
+      server.inject({
+        method: 'POST',
+        url: '/v1/chat/completions',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer token-${agent}`,
+        },
+        payload: JSON.stringify({
+          model: `gpt-4o-${idx}`,
+          messages: [
+            { role: 'system', content: `### tool_${agent}` },
+            { role: 'user', content: agent },
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'agent_zero_envelope',
+              strict: true,
+              schema: { type: 'object' },
+            },
+          },
+        }),
+      }),
+    );
+
+    const responses = await Promise.all(requests);
+
+    expect(responses.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+    for (const [idx, response] of responses.entries()) {
+      const agent = ['agent-a', 'agent-b', 'agent-c'][idx];
+      const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
+      const content = body.choices[0]?.message.content ?? '';
+      const envelope = JSON.parse(content.slice(0, content.lastIndexOf('}') + 1)) as {
+        tool_name: string;
+        tool_args: { text: string };
+      };
+
+      expect(envelope.tool_name).toBe('response');
+      expect(envelope.tool_args.text).toContain(`reply for ${agent}`);
+      expect(response.headers['x-truegate-upstream']).toBe(`openai/gpt-4o-${idx}`);
+    }
+
+    expect(captured).toHaveLength(3);
+    for (const agent of ['agent-a', 'agent-b', 'agent-c']) {
+      const entry = captured.find((item) => item.userText === agent);
+      expect(entry).toMatchObject({
+        authorization: `Bearer token-${agent}`,
+        userText: agent,
+      });
+      expect(entry?.advertisedTools).toContain(`tool_${agent}`);
+      expect(entry?.advertisedTools).not.toContain(
+        `tool_${agent === 'agent-a' ? 'agent-b' : 'agent-a'}`,
+      );
+    }
   });
 
   it('returns 404 for unknown routes', async () => {
