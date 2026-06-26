@@ -7,6 +7,7 @@ import { runIde } from './commands/ide.js';
 import { runStatus } from './commands/status.js';
 import { runGlobalInit } from './commands/global-init.js';
 import { runLogin } from './commands/login.js';
+import { runLogs } from './commands/logs.js';
 
 const program = new Command();
 
@@ -95,5 +96,25 @@ program
   .action(async () => {
     await runStatus();
   });
+
+program
+  .command('logs')
+  .description('Print or follow the redacted governance decision log')
+  .option('-f, --follow', 'Follow new governance events')
+  .option('-n, --lines <count>', 'Number of existing log lines to print first', '50')
+  .option('--pretty', 'Render compact human-readable log lines')
+  .option('--summary', 'Summarize recent governance decisions and rule hits')
+  .option('--no-color', 'Disable ANSI colors in pretty log output')
+  .action(
+    async (options: {
+      follow?: boolean;
+      lines?: string;
+      pretty?: boolean;
+      color?: boolean;
+      summary?: boolean;
+    }) => {
+    await runLogs(options);
+  },
+  );
 
 program.parse(process.argv);

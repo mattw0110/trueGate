@@ -88,10 +88,10 @@ export function governanceNote(
 
   if (severity === 'warn') {
     const issues = detail.issues ?? [];
-    if (issues.length === 0) return 'Governance: ⚠ policy applied';
+    if (issues.length === 0) return `Governance${sourceTag}: ⚠ policy applied`;
     const summary = summarizeIssues(issues);
     const count = issues.length;
-    return `Governance: ⚠ ${count} warning${count === 1 ? '' : 's'} · ${summary}`;
+    return `Governance${sourceTag}: ⚠ ${count} warning${count === 1 ? '' : 's'} · ${summary}`;
   }
 
   const tail = typeof detail.ruleCount === 'number' ? ` · ${detail.ruleCount} rules, clean` : '';

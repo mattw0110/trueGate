@@ -76,6 +76,8 @@ ok
 | `truegate ide <name>` | Print copy-paste setup for an IDE. |
 | `truegate status` | Proxy health + full upstream registry. |
 | `truegate inspect` | What governance is loaded right now. |
+| `truegate logs --follow --pretty` | Live redacted governance decisions. |
+| `truegate logs --summary` | Aggregate recent rule/guidance hits. |
 | `truegate login <name>` | Log in to a provider (claude, codex, gemini, grok, github, cursor). |
 | `truegate validate [file]` | Run rules against a file or stdin. |
 

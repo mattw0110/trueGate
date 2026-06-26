@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 const RuleEntrySchema = z.object({
+  id: z.string().optional(),
   pattern: z.string(),
   severity: z.enum(['warn', 'block']).default('warn'),
   message: z.string().optional(),

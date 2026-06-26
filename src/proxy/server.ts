@@ -4,6 +4,7 @@ import { requestCompilerHook } from './middleware/request-compiler.js';
 import { registerChatCompletionsRoute } from './routes/chat-completions.js';
 import { registerMessagesRoute } from './routes/messages.js';
 import { registerResponsesRoute } from './routes/responses.js';
+import { registerBlockOverrideRoutes } from './block-override.js';
 import { buildUpstreamRegistry } from '../registry/upstream-registry.js';
 import type { TrueGateConfig, UpstreamRegistry } from '../types/runtime.js';
 import type { FastifyInstance } from 'fastify';
@@ -34,6 +35,7 @@ export function buildServer(config: TrueGateConfig, registry?: UpstreamRegistry)
   fastify.addHook('onRequest', makeGovernanceLoaderHook());
   fastify.addHook('preHandler', requestCompilerHook);
 
+  registerBlockOverrideRoutes(fastify);
   registerChatCompletionsRoute(fastify, config, resolved);
   registerMessagesRoute(fastify, config, resolved);
   registerResponsesRoute(fastify, config, resolved);

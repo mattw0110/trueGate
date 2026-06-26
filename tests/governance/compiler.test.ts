@@ -30,6 +30,38 @@ describe('buildRuntimeContext', () => {
     expect(ctx.sources).toContain('global');
   });
 
+  it('records governance trace metadata for observability', () => {
+    const ctx = buildRuntimeContext([
+      {
+        ...makeFile('## Non-negotiables\n\nFollow these.\n\n## Security floor\n\nNo secrets.'),
+        bundleSource: 'data',
+        rulesPath: '/home/test/trueGate/data/rules.yaml',
+        frontMatter: {
+          ruleRefs: [{ id: 'dangerous:no-secrets', rule: 'dangerous-patterns', label: 'No secrets', line: 42 }],
+          rules: {
+            version: '1',
+            forbiddenDependencies: [],
+            forbiddenFrameworks: [],
+            dangerousPatterns: [],
+            typescriptRules: { noAny: true, requireStrict: true },
+          },
+        },
+      },
+    ]);
+    expect(ctx.trace).toMatchObject({
+      bundleSource: 'data',
+      governancePath: '/home/test/trueGate/data/governance.md',
+      rulesPath: '/home/test/trueGate/data/rules.yaml',
+      anchors: [
+        { title: 'Non-negotiables', line: 1, endLine: 4 },
+        { title: 'Security floor', line: 5, endLine: 7 },
+      ],
+      ruleRefs: [{ id: 'dangerous:no-secrets', rule: 'dangerous-patterns', label: 'No secrets', line: 42 }],
+    });
+    expect(ctx.trace?.governanceHash).toHaveLength(10);
+    expect(ctx.trace?.rulesHash).toHaveLength(10);
+  });
+
   it('returns context with framing even for no files', () => {
     const ctx = buildRuntimeContext([]);
     expect(ctx.sources).toHaveLength(0);

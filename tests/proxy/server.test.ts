@@ -1,16 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MockAgent, setGlobalDispatcher, getGlobalDispatcher, type Dispatcher } from 'undici';
 import { buildServer } from '../../src/proxy/server.js';
+import { clearBlockOverrides } from '../../src/proxy/block-override.js';
+import { flushGovernanceLog } from '../../src/governance/events/logger.js';
 import type { TrueGateConfig } from '../../src/types/runtime.js';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const OPENAI_HOST = 'https://api.openai.com';
 
 let tmpDir: string;
 let mockAgent: MockAgent;
 let originalDispatcher: Dispatcher;
+let originalStateDir: string | undefined;
 
 const testConfig = (): TrueGateConfig => ({
   port: 3458,
@@ -21,6 +25,9 @@ const testConfig = (): TrueGateConfig => ({
 
 beforeEach(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'truegate-proxy-test-'));
+  originalStateDir = process.env['TRUEGATE_STATE_DIR'];
+  process.env['TRUEGATE_STATE_DIR'] = join(tmpDir, '.state');
+  clearBlockOverrides();
   originalDispatcher = getGlobalDispatcher();
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
@@ -29,6 +36,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   setGlobalDispatcher(originalDispatcher);
+  await flushGovernanceLog();
+  if (originalStateDir === undefined) delete process.env['TRUEGATE_STATE_DIR'];
+  else process.env['TRUEGATE_STATE_DIR'] = originalStateDir;
   await rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -58,6 +68,25 @@ function headerValue(
   }
   const value = headers[name] ?? headers[name.toLowerCase()];
   return Array.isArray(value) ? value[0] : value;
+}
+
+async function readGovernanceEvents(minCount = 1): Promise<Array<Record<string, unknown>>> {
+  const path = join(process.env['TRUEGATE_STATE_DIR'] ?? '', 'logs', 'governance.ndjson');
+  for (let i = 0; i < 20; i += 1) {
+    try {
+      const raw = await readFile(path, 'utf-8');
+      const events = raw
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      if (events.length >= minCount) return events;
+    } catch {
+      /* wait for async log write */
+    }
+    await delay(25);
+  }
+  return [];
 }
 
 describe('proxy server', () => {
@@ -176,6 +205,89 @@ describe('proxy server', () => {
     expect(response.statusCode).toBe(200);
     const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
     expect(body.choices[0]?.message.content).toContain('Governance Block');
+  });
+
+  it('offers a one-shot override link for intended blocked behavior', async () => {
+    await writeFile(join(tmpDir, 'CLAUDE.md'), '# Project\nNo destructive commands.');
+
+    const server = buildServer(testConfig());
+
+    mockOpenAIResponse('Sure! Run: rm -rf / to clean up.');
+    const blocked = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json', host: 'host.docker.internal:3458' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'delete everything' }],
+      }),
+    });
+
+    const blockedBody = blocked.json<{ choices: Array<{ message: { content: string } }> }>();
+    const blockedText = blockedBody.choices[0]?.message.content ?? '';
+    expect(blockedText).toContain('Governance Block');
+    expect(blockedText).toContain('[Allow once]');
+    const overrideHref = /\[Allow once\]\((http:\/\/localhost:3458\/truegate\/override\/[^)]+)\)/.exec(
+      blockedText,
+    )?.[1];
+    expect(overrideHref).toBeDefined();
+
+    const armed = await server.inject({
+      method: 'GET',
+      url: new URL(overrideHref as string).pathname,
+    });
+    expect(armed.statusCode).toBe(200);
+    expect(armed.body).toContain('override armed');
+
+    mockOpenAIResponse('Sure! Run: rm -rf / to clean up.');
+    const overridden = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json', host: 'host.docker.internal:3458' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'delete everything' }],
+      }),
+    });
+    const overriddenBody = overridden.json<{ choices: Array<{ message: { content: string } }> }>();
+    const overriddenText = overriddenBody.choices[0]?.message.content ?? '';
+    expect(overriddenText).toContain('Sure! Run: rm -rf / to clean up.');
+    expect(overriddenText).toContain('Operator override used once');
+
+    mockOpenAIResponse('Sure! Run: rm -rf / to clean up.');
+    const blockedAgain = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json', host: 'host.docker.internal:3458' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'delete everything' }],
+      }),
+    });
+    const blockedAgainBody = blockedAgain.json<{ choices: Array<{ message: { content: string } }> }>();
+    expect(blockedAgainBody.choices[0]?.message.content).toContain('Governance Block');
+
+    const events = await readGovernanceEvents(3);
+    expect(events.map((event) => event['decision'])).toEqual(['block', 'override_allowed', 'block']);
+    expect(events[0]).toMatchObject({
+      event: 'governance_decision',
+      route: '/v1/chat/completions',
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      client: 'plain',
+      overrideOffered: true,
+      governance: {
+        bundleSource: 'data',
+      },
+    });
+    expect((events[0]?.['governance'] as { governanceHash?: string }).governanceHash).toHaveLength(
+      10,
+    );
+    expect(events[1]).toMatchObject({
+      decision: 'override_allowed',
+      overrideUsed: true,
+    });
+    expect(JSON.stringify(events)).not.toContain('Sure! Run: rm -rf / to clean up.');
   });
 
   it('keeps concurrent Agent Zero requests isolated', async () => {

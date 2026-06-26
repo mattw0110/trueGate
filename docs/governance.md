@@ -142,6 +142,74 @@ typescriptRules:
 | `block` | Response replaced with a governance refusal. Client gets a 200 with the block notice. |
 | `warn` | Warning block appended to the response. Request still delivered. |
 
+### One-shot operator override
+
+When a response is blocked, trueGate includes an `Allow once` link in the block notice. Clicking it opens a local trueGate page and arms a short-lived one-shot override. Retry the request after clicking the link; the next blocked response is delivered once with an `Operator override used once` audit footer. Later blocked responses are stopped again unless you approve another override.
+
+This is intended for cases where the model's output matches a block rule but the operator confirms the behavior is intentional. The override is local, expires after five minutes, and is consumed by the next blocked response only.
+
+### Live governance log
+
+trueGate writes redacted governance decisions to `.state/logs/governance.ndjson`. Each line is JSON with timestamp, route, provider, model, client shape, decision, rule IDs, messages, and truncated matched snippets. It does not store full prompts, full responses, headers, or credentials.
+
+Watch it live while tuning rules:
+
+```bash
+truegate logs --follow --pretty
+```
+
+Pretty mode color-codes decisions: green `PASS`, yellow `WARN`, red `BLOCK`, and purple `OVERRIDE_ALLOWED`. Use `--no-color` if your terminal or pager should receive plain text.
+
+Summarize recent tuning signals:
+
+```bash
+truegate logs --summary --lines 500
+```
+
+Print recent events:
+
+```bash
+truegate logs --lines 100 --pretty
+```
+
+Use raw NDJSON when piping to tools:
+
+```bash
+truegate logs --follow
+```
+
+Useful decisions are `pass`, `warn`, `block`, and `override_allowed`. A `block` event with repeated false positives usually means the matching rule is too broad. An `override_allowed` event means the operator explicitly allowed one blocked response through.
+
+Each pretty log line also includes `governance=<source>#<hash>`. The source is `data`, `.state`, or `mixed`; the hash is a short fingerprint of the exact `governance.md` content injected for that request. The next `guidance:` line lists top-level section ranges, such as `governance.md:15-22 Non-negotiables`.
+
+When a `rules.yaml` rule fires, pretty logs include the rule source line when trueGate can map it:
+
+```text
+- dangerous-patterns [dangerous:no-console-log] (rules.yaml:119): console.log left in code ... match="console.log("
+  related guidance [guidance:code-quality-floor-no-debug-leftovers]: governance.md:71-72 Code quality floor: No debug leftovers...
+```
+
+Rule IDs can be explicit on `dangerousPatterns` entries:
+
+```yaml
+dangerousPatterns:
+  - id: no-console-log
+    pattern: "console\\.log\\("
+    severity: warn
+    message: 'console.log left in code — use a real logger or remove before commit'
+```
+
+When an ID is omitted, trueGate generates one from the rule label. Generated IDs are stable for the same text, but explicit IDs are better when you plan to tune rules over time.
+
+Use this to verify prose guidance changes:
+
+1. Edit `data/governance.md` while developing the main shipped set.
+2. Wait five seconds for the governance cache to refresh.
+3. Run `truegate inspect` and confirm the governance hash, anchors, or line numbers changed.
+4. Watch `truegate logs --follow --pretty` and confirm new requests show the same `governance=data#...` hash.
+
+The hash proves the prose file was injected. `rules.yaml` still proves enforcement through `WARN` and `BLOCK` issue rows.
+
 ### Built-in patterns (always active)
 
 These fire regardless of what's in `rules.yaml`:

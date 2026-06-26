@@ -9,6 +9,7 @@ import { shouldBlock } from '../../validators/engine/severity-handler.js';
 import {
   formatWarnings,
   formatBlockedResponse,
+  formatOverrideNotice,
 } from '../../validators/reporting/warning-formatter.js';
 import {
   resolveMarker,
@@ -18,6 +19,8 @@ import {
   governanceNote,
 } from '../../validators/reporting/response-marker.js';
 import { pickUpstreamForModel } from '../../registry/route-model.js';
+import { consumeApprovedBlockOverride, createBlockOverrideUrl } from '../block-override.js';
+import { logGovernanceDecision } from '../../governance/events/logger.js';
 import type { TrueGateConfig, UpstreamRegistry } from '../../types/runtime.js';
 import type {
   ResponsesRequest,
@@ -52,6 +55,20 @@ function applyMarkerToResponse(resp: ResponsesResponse, marker: string): Respons
   const out: ResponsesResponse = { ...resp, output: newOutput };
   if (newOutputText !== undefined) out.output_text = newOutputText;
   return out;
+}
+
+function governanceTraceLabel(context: { trace?: { bundleSource: string; governanceHash?: string } } | undefined): string | undefined {
+  const trace = context?.trace;
+  if (!trace) return undefined;
+  return `${trace.bundleSource}#${trace.governanceHash ?? 'no-md'}`;
+}
+
+function withGovernanceTrace<T extends Record<string, unknown>>(
+  context: { trace?: { bundleSource: string; governanceHash?: string } } | undefined,
+  detail: T,
+): T & { bundleSource?: string } {
+  const label = governanceTraceLabel(context);
+  return label ? { ...detail, bundleSource: label } : detail;
 }
 
 export function registerResponsesRoute(
@@ -122,7 +139,11 @@ export function registerResponsesRoute(
       marker,
       !!context,
       context ? 'pass' : undefined,
-      context ? { ruleCount: context.rules.dangerousPatterns.length } : {},
+      context
+        ? withGovernanceTrace(context, {
+            ruleCount: context.rules.dangerousPatterns.length,
+          })
+        : {},
     );
     const fullMarker = note ? `${marker}\n${note}` : marker;
 
@@ -131,9 +152,49 @@ export function registerResponsesRoute(
     }
 
     const result = validateResponsesResponse(upstreamResponse, context.rules);
+    const logDecision = (decision: 'pass' | 'warn' | 'block' | 'override_allowed') => {
+      logGovernanceDecision({
+        decision,
+        route: '/v1/responses',
+        result,
+        provider: endpoint.provider,
+        model: requestedModel,
+        client: 'responses',
+        statusCode: 200,
+        overrideOffered: decision === 'block',
+        overrideUsed: decision === 'override_allowed',
+        ...(context.trace ? { governance: context.trace } : {}),
+      }).catch((err) => fastify.log.warn({ err }, 'governance log write failed'));
+    };
 
     if (shouldBlock(result)) {
-      const blockText = appendMarker(formatBlockedResponse(result), marker);
+      if (consumeApprovedBlockOverride()) {
+        logDecision('override_allowed');
+        const overrideNote = governanceNote(
+          marker,
+          true,
+          'warn',
+          withGovernanceTrace(context, { issues: result.issues }),
+        );
+        const overrideMarker = overrideNote ? `${marker}\n${overrideNote}` : marker;
+        const overriddenText = appendMarker(
+          extractResponsesText(upstreamResponse) + formatOverrideNotice(result),
+          overrideMarker,
+        );
+        const overriddenOutput: ResponsesOutputItem = {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: overriddenText }],
+        };
+        return reply.send({
+          ...upstreamResponse,
+          output: [overriddenOutput],
+          output_text: overriddenText,
+        });
+      }
+      logDecision('block');
+      const overrideUrl = createBlockOverrideUrl(request);
+      const blockText = appendMarker(formatBlockedResponse(result, overrideUrl), marker);
       const blockedOutput: ResponsesOutputItem = {
         type: 'message',
         role: 'assistant',
@@ -143,7 +204,13 @@ export function registerResponsesRoute(
     }
 
     if (result.severity === 'warn') {
-      const warnNote = governanceNote(marker, true, 'warn', { issues: result.issues });
+      logDecision('warn');
+      const warnNote = governanceNote(
+        marker,
+        true,
+        'warn',
+        withGovernanceTrace(context, { issues: result.issues }),
+      );
       const warnMarker = warnNote ? `${marker}\n${warnNote}` : marker;
       const original = extractResponsesText(upstreamResponse);
       const warnedText = appendMarker(original + formatWarnings(result), warnMarker);
@@ -155,6 +222,7 @@ export function registerResponsesRoute(
       return reply.send({ ...upstreamResponse, output: [warnedOutput], output_text: warnedText });
     }
 
+    logDecision('pass');
     return reply.send(applyMarkerToResponse(upstreamResponse, fullMarker));
   });
 }

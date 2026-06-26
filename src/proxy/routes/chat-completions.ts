@@ -6,6 +6,7 @@ import { shouldBlock } from '../../validators/engine/severity-handler.js';
 import {
   formatWarnings,
   formatBlockedResponse,
+  formatOverrideNotice,
 } from '../../validators/reporting/warning-formatter.js';
 import {
   resolveMarker,
@@ -27,6 +28,8 @@ import {
   extractAdvertisedAgentZeroTools,
   translateResponseToConvention,
 } from '../tool-translation.js';
+import { consumeApprovedBlockOverride, createBlockOverrideUrl } from '../block-override.js';
+import { logGovernanceDecision } from '../../governance/events/logger.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -94,6 +97,20 @@ function appendSuffixRespectingEnvelope(content: string, suffix: string): string
   }
   if (alreadyMarked(content, suffix)) return content;
   return content + suffix;
+}
+
+function governanceTraceLabel(context: CompiledContext | undefined): string | undefined {
+  const trace = context?.trace;
+  if (!trace) return undefined;
+  return `${trace.bundleSource}#${trace.governanceHash ?? 'no-md'}`;
+}
+
+function withGovernanceTrace<T extends Record<string, unknown>>(
+  context: CompiledContext | undefined,
+  detail: T,
+): T & { bundleSource?: string } {
+  const label = governanceTraceLabel(context);
+  return label ? { ...detail, bundleSource: label } : detail;
 }
 
 /**
@@ -225,6 +242,8 @@ function applyGovernanceAndMarker(
   context: CompiledContext | undefined,
   marker: string,
   priorMessages: ChatMessage[] = [],
+  createOverrideUrl?: () => string,
+  logDecision?: (result: ReturnType<typeof validateResponse>, decision: 'pass' | 'warn' | 'block' | 'override_allowed') => void,
 ): ChatCompletionResponse {
   const firstChoice = response.choices[0];
   const content = firstChoice?.message?.content;
@@ -233,6 +252,25 @@ function applyGovernanceAndMarker(
   if (context) {
     const result = validateResponse(content, context.rules, priorMessages);
     if (shouldBlock(result)) {
+      if (consumeApprovedBlockOverride()) {
+        logDecision?.(result, 'override_allowed');
+        const note = governanceNote(marker, true, 'warn', withGovernanceTrace(context, { issues: result.issues }));
+        const fullMarker = note ? `${marker}\n${note}` : marker;
+        const suffix = formatOverrideNotice(result) + (fullMarker ? `\n\n${fullMarker}` : '');
+        return {
+          ...response,
+          choices: [
+            {
+              ...firstChoice,
+              message: {
+                role: 'assistant',
+                content: appendSuffixRespectingEnvelope(content, suffix),
+              },
+            },
+          ],
+        };
+      }
+      logDecision?.(result, 'block');
       return {
         ...response,
         choices: [
@@ -240,7 +278,7 @@ function applyGovernanceAndMarker(
             ...firstChoice,
             message: {
               role: 'assistant',
-              content: appendMarker(formatBlockedResponse(result), marker),
+              content: appendMarker(formatBlockedResponse(result, createOverrideUrl?.()), marker),
             },
             finish_reason: 'stop',
           },
@@ -248,7 +286,8 @@ function applyGovernanceAndMarker(
       };
     }
     if (result.severity === 'warn') {
-      const note = governanceNote(marker, true, 'warn', { issues: result.issues });
+      logDecision?.(result, 'warn');
+      const note = governanceNote(marker, true, 'warn', withGovernanceTrace(context, { issues: result.issues }));
       const fullMarker = note ? `${marker}\n${note}` : marker;
       const suffix = formatWarnings(result) + (fullMarker ? `\n\n${fullMarker}` : '');
       return {
@@ -266,12 +305,20 @@ function applyGovernanceAndMarker(
     }
   }
 
+  if (context) {
+    logDecision?.({ severity: 'pass', issues: [], blocked: false }, 'pass');
+  }
+
   if (!marker) return response;
   const note = governanceNote(
     marker,
     !!context,
     'pass',
-    context ? { ruleCount: context.rules.dangerousPatterns.length } : {},
+    context
+      ? withGovernanceTrace(context, {
+          ruleCount: context.rules.dangerousPatterns.length,
+        })
+      : {},
   );
   const suffix = markerWithNote(marker, note);
   return {
@@ -293,9 +340,40 @@ function sendChatCompletion(
   marker: string,
   log?: (level: 'warn' | 'info', msg: string) => void,
   upstreamHeader?: string,
+  createOverrideUrl?: () => string,
 ) {
-  const decorated = applyGovernanceAndMarker(response, context, marker, requestBody.messages ?? []);
   const convention = detectClientConvention(requestBody);
+  const providerModel = upstreamHeader?.split('/');
+  const logDecision = (
+    result: ReturnType<typeof validateResponse>,
+    decision: 'pass' | 'warn' | 'block' | 'override_allowed',
+  ) => {
+    const event = {
+      decision,
+      route: '/v1/chat/completions',
+      result,
+      client: convention,
+      statusCode: 200,
+      overrideOffered: decision === 'block',
+      overrideUsed: decision === 'override_allowed',
+    };
+    const provider = providerModel?.[0];
+    const model = providerModel?.slice(1).join('/');
+    logGovernanceDecision({
+      ...event,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
+      ...(context?.trace ? { governance: context.trace } : {}),
+    }).catch((err) => log?.('warn', `governance log write failed: ${err}`));
+  };
+  const decorated = applyGovernanceAndMarker(
+    response,
+    context,
+    marker,
+    requestBody.messages ?? [],
+    createOverrideUrl,
+    logDecision,
+  );
   const agentZeroTools =
     convention === 'agent-zero'
       ? extractAdvertisedAgentZeroTools(requestBody.messages ?? [])
@@ -376,6 +454,7 @@ export function registerChatCompletionsRoute(
             marker,
             log,
             upstreamHeader,
+            () => createBlockOverrideUrl(request),
           );
         }
 
@@ -432,6 +511,7 @@ export function registerChatCompletionsRoute(
           marker,
           log,
           upstreamHeader,
+          () => createBlockOverrideUrl(request),
         );
       } catch (err) {
         fastify.log.error(err, 'Provider error');

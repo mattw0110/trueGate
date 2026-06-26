@@ -19,9 +19,29 @@ export function formatOverrideReport(context: CompiledContext): string {
 
 export function formatContextSummary(context: CompiledContext): string {
   const sourceLabels = context.sources.map((s) => SOURCE_LABELS[s] ?? s);
+  const trace = context.trace;
+  const traceLines = trace
+    ? [
+        '',
+        '## Active Governance Trace\n',
+        `- Bundle source: ${trace.bundleSource}`,
+        ...(trace.governancePath ? [`- Governance file: ${trace.governancePath}`] : []),
+        ...(trace.rulesPath ? [`- Rules file: ${trace.rulesPath}`] : []),
+        ...(trace.governanceHash ? [`- Governance hash: ${trace.governanceHash}`] : []),
+        ...(trace.rulesHash ? [`- Rules hash: ${trace.rulesHash}`] : []),
+        `- Guidance anchors: ${
+          trace.anchors.length > 0
+            ? trace.anchors
+                .map((anchor) => `${anchor.title} (lines ${anchor.line}-${anchor.endLine})`)
+                .join(', ')
+            : 'none'
+        }`,
+      ]
+    : [];
   const lines = [
     '## Active Governance Sources\n',
     ...sourceLabels.map((s) => `- ${s}`),
+    ...traceLines,
     '',
     '## Active Rules\n',
     `- Forbidden dependencies: ${context.rules.forbiddenDependencies.length > 0 ? context.rules.forbiddenDependencies.join(', ') : 'none'}`,
