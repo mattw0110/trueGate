@@ -102,7 +102,7 @@ function buildProbeDefs(config: TrueGateConfig): ProbeDef[] {
       }),
       requiresKey: true,
       // Anthropic /v1/models may 404 on some accounts; fall back to known IDs.
-      staticModels: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-4-5'],
+      staticModels: ['claude-sonnet-4-6', 'claude-opus-4-5', 'claude-haiku-4-5'],
     });
   }
 

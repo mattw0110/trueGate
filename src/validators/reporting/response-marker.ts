@@ -16,8 +16,8 @@ export function resolveMarker(config: Pick<TrueGateConfig, 'responseMarker'>): s
 /**
  * Format the marker with an upstream/model suffix so every response
  * self-documents which backend served it. Example:
- *   formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-5')
- *     → '— trueGate · cliproxy/claude-sonnet-4-5'
+ *   formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-6')
+ *     → '— trueGate · cliproxy/claude-sonnet-4-6'
  *
  * If `baseMarker` is empty (operator opt-out), the result is empty regardless.
  * If `provider`/`model` are missing, returns the base marker unchanged.

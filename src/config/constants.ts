@@ -35,5 +35,5 @@ export const DEFAULT_PROVIDER_PRIORITY: ProviderName[] = [
 ];
 
 export const ANTHROPIC_VERSION = '2023-06-01';
-export const ANTHROPIC_DEFAULT_MODEL = 'claude-sonnet-4-5';
+export const ANTHROPIC_DEFAULT_MODEL = 'claude-sonnet-4-6';
 export const OPENAI_BASE_URL = PROVIDER_BASE_URLS.openai;

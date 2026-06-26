@@ -53,10 +53,10 @@ truegate serve
 With no flags, trueGate probes every potential upstream and builds a live registry. Each request is dispatched to the right backend by model name automatically:
 
 ```
-[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-5, gpt-5.5, …)
-[truegate] ollama     localhost:11434  ✓ 4 models (llama3.1, qwen2.5-coder, …)
+[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-6, gpt-5.5, …)
+[truegate] ollama     localhost:11434  ✓ 11 models (qwen3-coder, qwen2.5-coder, …)
 [truegate] lmstudio   localhost:1234   ✗ unreachable
-[truegate] mode=auto, priority=openai>anthropic>cliproxy>ollama>lmstudio
+[truegate] mode=auto, priority=openai>anthropic>github-copilot>cliproxy>ollama>lmstudio
 trueGate proxy listening on http://localhost:8457
   → governance: bundled defaults (data/) + operator overrides (.state/)
 ```
@@ -81,10 +81,12 @@ Set all your AI tools to use `http://localhost:8457` as their base URL:
 | Cursor | Settings → Models → Override OpenAI Base URL → `http://localhost:8457/v1` |
 | Codex CLI | `OPENAI_BASE_URL=http://localhost:8457/v1` |
 | Continue.dev | `baseUrl: "http://localhost:8457/v1"` in config |
+| Agent Zero / Agent0 | OpenAI-compatible base URL `http://host.docker.internal:8457/v1` from Docker |
 | Any OpenAI SDK | `base_url="http://localhost:8457/v1"` |
 | Any Anthropic SDK | `base_url="http://localhost:8457"` |
 
 Full per-IDE recipes: [ide-setup.md](./ide-setup.md)
+Agent0 Docker recipe: [agent0.md](./agent0.md)
 
 ---
 
@@ -98,8 +100,8 @@ truegate inspect   # what governance is loaded
 Every response ends with two lines:
 
 ```
-— trueGate · cliproxy/claude-sonnet-4-5
-Governance: operator bundle
+— trueGate · cliproxy/claude-sonnet-4-6
+Governance: operator bundle · 28 rules, clean
 ```
 
 This confirms governance ran and which backend served the request. The `x-truegate-upstream: provider/model` response header carries the same info programmatically.

@@ -4,7 +4,7 @@
 
 # trueGate
 
-> Self-contained governance proxy for AI coding tools. Routes requests by model name, injects operator-wide guidance, and validates responses — all from a single folder. Never touches your project repos.
+> Self-contained governance proxy for AI coding tools. Routes requests by model name, injects operator-wide guidance, and validates responses. Install it once, point every tool at `http://localhost:8457`, and keep governance out of your project repos.
 
 ```
 ┌──────────────┐   ┌────────────┐   ┌───────────────┐
@@ -23,7 +23,8 @@
 - **Tool-call aware** — scans `tool_use.input` and `function_call.arguments`, not just plain text.
 - **Every major API** — `/v1/messages` (Claude Code, Anthropic SDK), `/v1/chat/completions` (Cursor, OpenAI SDK, Continue.dev), `/v1/responses` (Codex CLI). **Agent Zero envelope requests handled natively.**
 - **Transparent** — every response carries `— trueGate · provider/model` and an `x-truegate-upstream` header.
-- **Self-contained** — `git clone && npm install && npm start`. Zero files written outside the repo.
+- **Local + hosted friendly** — use hosted Claude/GPT through CLIProxyAPI or direct API keys, local Ollama/LM Studio for offline fallback, or both in auto-routing mode.
+- **Self-contained** — `git clone && npm install && npm start`. Runtime state lives in this repo's `.state/` and `vendor/` directories unless you intentionally point trueGate at a system-wide provider.
 
 ## Quickstart
 
@@ -41,11 +42,28 @@ node dist/cli/index.cjs serve
 Startup output:
 
 ```
-[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-5, gpt-5.5, …)
-[truegate] ollama     localhost:11434  ✓ 4 models (llama3.1, qwen2.5-coder, …)
+[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-6, gpt-5.5, …)
+[truegate] ollama     localhost:11434  ✓ 11 models (qwen3-coder, qwen2.5-coder, …)
 [truegate] lmstudio   localhost:1234   ✗ unreachable
-[truegate] mode=auto, priority=openai>anthropic>cliproxy>ollama>lmstudio
+[truegate] mode=auto, priority=openai>anthropic>github-copilot>cliproxy>ollama>lmstudio
 trueGate proxy listening on http://localhost:8457
+```
+
+Smoke test:
+
+```bash
+curl -sS http://localhost:8457/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -H "authorization: Bearer ${CLI_PROXY_API_KEY:-dummy}" \
+  -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"reply exactly: ok"}],"max_tokens":20}'
+```
+
+Expected response text includes:
+
+```
+ok
+
+— trueGate · cliproxy/claude-sonnet-4-6
 ```
 
 ## Commands
@@ -108,6 +126,7 @@ CLI flags  >  TRUEGATE_* env vars  >  .state/config.json  >  built-in defaults
 - [install.md](./docs/install.md) — full install & setup (start here)
 - [quickstart.md](./docs/quickstart.md) — condensed walkthrough
 - [ide-setup.md](./docs/ide-setup.md) — per-IDE recipes
+- [agent0.md](./docs/agent0.md) — Agent Zero / Agent0 Docker setup through trueGate
 - [governance.md](./docs/governance.md) — writing governance files and rules
 - [login.md](./docs/login.md) — provider login flows
 - [architecture.md](./docs/architecture.md) — how the proxy works internally

@@ -42,8 +42,8 @@ describe('appendMarker', () => {
 
 describe('formatMarker', () => {
   it('appends provider/model suffix', () => {
-    expect(formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-5')).toBe(
-      '— trueGate · cliproxy/claude-sonnet-4-5',
+    expect(formatMarker('— trueGate', 'cliproxy', 'claude-sonnet-4-6')).toBe(
+      '— trueGate · cliproxy/claude-sonnet-4-6',
     );
   });
 

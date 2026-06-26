@@ -42,7 +42,7 @@ describe('buildUpstreamRegistry', () => {
       .reply(
         200,
         JSON.stringify({
-          data: [{ id: 'claude-sonnet-4-5' }, { id: 'gpt-5-codex' }, { id: 'gemini-2.5-pro' }],
+          data: [{ id: 'claude-sonnet-4-6' }, { id: 'gpt-5-codex' }, { id: 'gemini-2.5-pro' }],
         }),
         { headers: { 'content-type': 'application/json' } },
       );
@@ -64,7 +64,7 @@ describe('buildUpstreamRegistry', () => {
 
     const cliproxy = reg.endpoints.find((e) => e.provider === 'cliproxy');
     expect(cliproxy?.reachable).toBe(true);
-    expect(cliproxy?.models).toContain('claude-sonnet-4-5');
+    expect(cliproxy?.models).toContain('claude-sonnet-4-6');
     expect(cliproxy?.models).toContain('gpt-5-codex');
 
     const ollama = reg.endpoints.find((e) => e.provider === 'ollama');

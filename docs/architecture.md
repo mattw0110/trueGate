@@ -60,7 +60,7 @@ Loads and compiles operator governance at request time:
 - **`rules/dangerous-patterns.ts`** — hardcoded block regexes + user patterns from `rules.yaml`.
 - **`rules/forbidden-dependencies.ts`**, **`forbidden-frameworks.ts`**, **`typescript-rules.ts`** — per-rule validators.
 - **`engine/validate-response.ts`** — fan-out, aggregate across all validators.
-- **`reporting/response-marker.ts`** — `formatMarker(base, provider, model)` produces `— trueGate · cliproxy/gpt-5.5`.
+- **`reporting/response-marker.ts`** — `formatMarker(base, provider, model)` produces `— trueGate · cliproxy/claude-sonnet-4-6`.
 
 ### `src/proxy/routes/`
 
@@ -110,30 +110,49 @@ Claude Code
        ↓
 trueGate :8457
   onRequest: load data/ + .state/ → CompiledContext
-  pick endpoint: model=claude-sonnet-4-5 → exact match → cliproxy
+  pick endpoint: model=claude-sonnet-4-6 → exact match → cliproxy
   in-route: injectGovernanceIntoAnthropic(body, ctx) → adds `system`
   upstream: POST http://127.0.0.1:8317/v1/messages
-  response: validateResponse + appendMarker → "— trueGate · cliproxy/claude-sonnet-4-5"
-  header:   x-truegate-upstream: cliproxy/claude-sonnet-4-5
+  response: validateResponse + appendMarker → "— trueGate · cliproxy/claude-sonnet-4-6"
+  header:   x-truegate-upstream: cliproxy/claude-sonnet-4-6
        ↓
 CLIProxyAPI :8317
   reads OAuth-stored Anthropic credentials
   calls real api.anthropic.com
 ```
 
+## Request lifecycle: Agent0 Docker → trueGate → CLIProxyAPI
+
+```
+Agent0 container
+  POST /v1/chat/completions
+  base URL: http://host.docker.internal:8457/v1
+  body: { model: "claude-sonnet-4-6", response_format: agent_zero_envelope, ... }
+       ↓
+trueGate :8457
+  onRequest: load governance
+  pick endpoint: model=claude-sonnet-4-6 → exact match → cliproxy
+  in-route: normalize Agent Zero envelope contract, strip provider-incompatible response_format for cliproxy when needed
+  upstream: POST http://127.0.0.1:8317/v1/chat/completions
+  response: validate + Agent Zero envelope normalization + marker
+  header:   x-truegate-upstream: cliproxy/claude-sonnet-4-6
+```
+
+From Docker, `localhost` points at the container. Use `host.docker.internal` for trueGate and any host-local Ollama service.
+
 ## Request lifecycle: Cursor → trueGate → Ollama
 
 ```
 Cursor
   POST /v1/chat/completions
-  body: { model: "llama3.1", messages: [...] }
+  body: { model: "qwen3-coder", messages: [...] }
        ↓
 trueGate :8457
   onRequest: load governance
-  pick endpoint: model=llama3.1 → prefix "llama*" → ollama
+  pick endpoint: model=qwen3-coder → substring scan → ollama
   in-route: prepend governance system message, POST http://localhost:11434/v1/chat/completions
-  response: validate + "— trueGate · ollama/llama3.1"
-  header:   x-truegate-upstream: ollama/llama3.1
+  response: validate + "— trueGate · ollama/qwen3-coder"
+  header:   x-truegate-upstream: ollama/qwen3-coder
 ```
 
 ---

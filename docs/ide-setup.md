@@ -4,6 +4,8 @@ Point any AI tool at trueGate (`http://localhost:8457`) and governance is enforc
 
 > All examples assume trueGate is already running. See [quickstart.md](./quickstart.md) for that.
 
+If the tool runs inside Docker, `localhost` means the container. Use `http://host.docker.internal:8457` or `http://host.docker.internal:8457/v1` from inside containers.
+
 ---
 
 ## Claude Code
@@ -43,6 +45,54 @@ codex
 ```
 
 trueGate handles both `/v1/chat/completions` (older Codex) and `/v1/responses` (current Codex) automatically.
+
+---
+
+## Agent Zero / Agent0
+
+Agent0 works best through trueGate's OpenAI-compatible route. In Docker, point it at the host trueGate instance:
+
+```json
+{
+  "chat_model": {
+    "provider": "openai",
+    "name": "claude-sonnet-4-6",
+    "api_base": "http://host.docker.internal:8457/v1",
+    "ctx_length": 200000,
+    "ctx_history": 0.7,
+    "vision": true,
+    "kwargs": {
+      "max_tokens": 32000,
+      "temperature": 1
+    }
+  },
+  "utility_model": {
+    "provider": "openai",
+    "name": "claude-sonnet-4-6",
+    "api_base": "http://host.docker.internal:8457/v1",
+    "ctx_length": 200000,
+    "ctx_input": 0.7,
+    "kwargs": {
+      "max_tokens": 16000,
+      "temperature": 1
+    }
+  }
+}
+```
+
+Set `CLI_PROXY_API_KEY` or the token your upstream expects in the Agent0 container environment. Keep embeddings local if Ollama is available:
+
+```json
+{
+  "embedding_model": {
+    "provider": "ollama",
+    "name": "qwen3-embedding:8b",
+    "api_base": "http://host.docker.internal:11434"
+  }
+}
+```
+
+Full Agent0 notes: [agent0.md](./agent0.md)
 
 ---
 

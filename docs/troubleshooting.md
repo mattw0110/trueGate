@@ -57,6 +57,8 @@ If this fails the same way, the issue is upstream-side, not trueGate.
 
 Usually a cold-start timeout. Ollama may take 30–120 seconds to load a large model into VRAM on the first request. Subsequent calls are fast. Retry after the model finishes loading.
 
+If the client runs in Docker, use `http://host.docker.internal:11434`, not `http://localhost:11434`, unless Ollama is inside the same container.
+
 ## Request routed to the wrong upstream
 
 Check routing with `truegate status` — it prints the full registry with which models each upstream claims. For a live request, the `x-truegate-upstream: provider/model` response header tells you exactly where it went.
@@ -99,6 +101,33 @@ Mitigations:
 - Use the Claude preset (more reliable envelope adherence than smaller models).
 - Reset the chat or trim old context to reduce prompt size.
 - This is rare (one event per thousands of turns in practice).
+
+## Agent0 cannot reach trueGate
+
+Inside Docker, `localhost` is the Agent0 container. Configure Agent0 with:
+
+```text
+http://host.docker.internal:8457/v1
+```
+
+and make sure the compose service has:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+Run this from the host to test the path from inside Agent0:
+
+```bash
+docker exec agent0 python3 -c "import json, os, urllib.request; payload={'model':'claude-sonnet-4-6','messages':[{'role':'user','content':'Reply with exactly: ok'}],'max_tokens':10}; req=urllib.request.Request('http://host.docker.internal:8457/v1/chat/completions', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ.get('CLI_PROXY_API_KEY','')}); r=urllib.request.urlopen(req, timeout=30); print(r.status, json.loads(r.read())['choices'][0]['message']['content'])"
+```
+
+Expected output includes `— trueGate · cliproxy/claude-sonnet-4-6`.
+
+## Agent0 logs show `Command 'serena' not found` or `Command 'sentrux' not found`
+
+That is an Agent0 MCP configuration issue, not a trueGate issue. Disable MCP entries whose commands are not installed inside the Agent0 container, or install/mount those commands into the image. Keeping broken MCP entries enabled slows startup and hides real failures in noisy logs.
 
 ## "Blocked: the model tried to call 'input:', tool not advertised"
 

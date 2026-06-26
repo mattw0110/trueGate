@@ -32,10 +32,10 @@ function reg(
 describe('pickUpstreamForModel', () => {
   it('routes exact model match to the right provider', () => {
     const r = reg([
-      ep('cliproxy', ['claude-sonnet-4-5', 'gpt-5-codex']),
+      ep('cliproxy', ['claude-sonnet-4-6', 'gpt-5-codex']),
       ep('ollama', ['llama3.1']),
     ]);
-    const out = pickUpstreamForModel('claude-sonnet-4-5', r, config);
+    const out = pickUpstreamForModel('claude-sonnet-4-6', r, config);
     expect(out.endpoint.provider).toBe('cliproxy');
     expect(out.reason).toBe('exact');
   });
@@ -54,21 +54,21 @@ describe('pickUpstreamForModel', () => {
 
   it('honors modelOverrides ahead of patterns', () => {
     const r = reg([ep('anthropic', []), ep('cliproxy', [])], {
-      modelOverrides: { 'claude-sonnet-4-5': 'cliproxy' },
+      modelOverrides: { 'claude-sonnet-4-6': 'cliproxy' },
     });
-    expect(pickUpstreamForModel('claude-sonnet-4-5', r, config).endpoint.provider).toBe('cliproxy');
+    expect(pickUpstreamForModel('claude-sonnet-4-6', r, config).endpoint.provider).toBe('cliproxy');
   });
 
   it('forcedProvider wins regardless of model', () => {
-    const r = reg([ep('cliproxy', ['claude-sonnet-4-5']), ep('openai', ['gpt-4o'])], {
+    const r = reg([ep('cliproxy', ['claude-sonnet-4-6']), ep('openai', ['gpt-4o'])], {
       forcedProvider: 'cliproxy',
     });
     expect(pickUpstreamForModel('gpt-4o', r, config).endpoint.provider).toBe('cliproxy');
-    expect(pickUpstreamForModel('claude-sonnet-4-5', r, config).endpoint.provider).toBe('cliproxy');
+    expect(pickUpstreamForModel('claude-sonnet-4-6', r, config).endpoint.provider).toBe('cliproxy');
   });
 
   it('falls back to highest-priority reachable upstream for unknown models', () => {
-    const r = reg([ep('openai', ['gpt-4o']), ep('cliproxy', ['claude-sonnet-4-5'])]);
+    const r = reg([ep('openai', ['gpt-4o']), ep('cliproxy', ['claude-sonnet-4-6'])]);
     const out = pickUpstreamForModel('mystery-model-7', r, config);
     expect(out.endpoint.provider).toBe('openai');
     expect(out.reason).toBe('fallback');

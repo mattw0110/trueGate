@@ -95,7 +95,7 @@ describe('proxy server', () => {
       url: '/v1/chat/completions',
       headers: { 'content-type': 'application/json' },
       payload: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-4-6-20250929',
         messages: [{ role: 'user', content: 'say hi in french' }],
         response_format: {
           type: 'json_schema',
@@ -133,7 +133,7 @@ describe('proxy server', () => {
       url: '/v1/chat/completions',
       headers: { 'content-type': 'application/json' },
       payload: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-4-6-20250929',
         stream: true,
         messages: [{ role: 'user', content: 'say hi in french' }],
         response_format: {

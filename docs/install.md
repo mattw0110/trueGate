@@ -140,10 +140,10 @@ Default behavior (no flags): trueGate probes every potential upstream and builds
 Startup output:
 
 ```
-[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-5, gpt-5.5, …)
-[truegate] ollama     localhost:11434  ✓ 4 models (llama3.1, qwen2.5-coder, …)
+[truegate] cliproxy   127.0.0.1:8317  ✓ 27 models (claude-sonnet-4-6, gpt-5.5, …)
+[truegate] ollama     localhost:11434  ✓ 11 models (qwen3-coder, qwen2.5-coder, …)
 [truegate] lmstudio   localhost:1234   ✗ unreachable
-[truegate] mode=auto, priority=openai>anthropic>cliproxy>ollama>lmstudio
+[truegate] mode=auto, priority=openai>anthropic>github-copilot>cliproxy>ollama>lmstudio
 trueGate proxy listening on http://localhost:8457
   → governance: bundled defaults (data/) + operator overrides (.state/)
 ```
@@ -195,10 +195,19 @@ truegate status    # proxy health + upstream registry
 # Direct curl smoke test
 curl -sS http://localhost:8457/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"gpt-5.5","messages":[{"role":"user","content":"reply: ok"}]}'
+  -H "authorization: Bearer ${CLI_PROXY_API_KEY:-dummy}" \
+  -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"reply: ok"}],"max_tokens":20}'
 ```
 
 Every response ends with `— trueGate · provider/model` and carries `x-truegate-upstream: provider/model` header confirming which backend served it.
+
+For Dockerized Agent Zero / Agent0, use the OpenAI-compatible route from inside the container:
+
+```text
+http://host.docker.internal:8457/v1
+```
+
+See [agent0.md](./agent0.md) for the exact model config shape.
 
 ---
 

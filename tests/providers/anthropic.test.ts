@@ -26,7 +26,7 @@ function mockAnthropicResponse(text: string) {
       id: 'msg_test',
       type: 'message',
       role: 'assistant',
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       content: [{ type: 'text', text }],
       stop_reason: 'end_turn',
       usage: { input_tokens: 10, output_tokens: 5 },
@@ -48,7 +48,7 @@ describe('AnthropicProvider', () => {
           id: 'msg_1',
           type: 'message',
           role: 'assistant',
-          model: 'claude-sonnet-4-5',
+          model: 'claude-sonnet-4-6',
           content: [{ type: 'text', text: 'Hello' }],
           stop_reason: 'end_turn',
           usage: { input_tokens: 5, output_tokens: 3 },
@@ -79,7 +79,7 @@ describe('AnthropicProvider', () => {
 
     const provider = new AnthropicProvider('sk-ant-test', MOCK_BASE);
     const result = await provider.complete({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       messages: [{ role: 'user', content: 'What is the answer?' }],
     });
 
@@ -158,7 +158,7 @@ describe('AnthropicProvider', () => {
     const provider = new AnthropicProvider('bad-key', MOCK_BASE);
     await expect(
       provider.complete({
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
         messages: [{ role: 'user', content: 'hi' }],
       }),
     ).rejects.toThrow('401');
