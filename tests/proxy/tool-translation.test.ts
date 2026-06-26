@@ -3,6 +3,7 @@ import {
   detectClientConvention,
   canonicalize,
   parseXmlFunctionCall,
+  parseToolCallJsonXml,
   parseAgentZeroEnvelope,
   parseOpenAIToolCall,
   parseAnthropicToolUse,
@@ -933,6 +934,35 @@ describe('extractAdvertisedAgentZeroTools', () => {
     expect(tools!.has('response')).toBe(true);
     expect(tools!.has('text_editor')).toBe(true);
     expect(tools!.has('code_execution_tool')).toBe(true);
+  });
+});
+
+describe('parseToolCallJsonXml', () => {
+  it('extracts Claude-style <tool_call> JSON with name/input', () => {
+    const c = parseToolCallJsonXml(
+      'Let me read it.\n<tool_call>{"name":"read_file","input":{"path":"/a0/usr/projects/truemarketing/backend/services/_internal_copywriter_strategy_stage_execution.py"}}</tool_call>',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe(
+      '/a0/usr/projects/truemarketing/backend/services/_internal_copywriter_strategy_stage_execution.py',
+    );
+    expect(c?.preface).toBe('Let me read it.');
+  });
+
+  it('lets agent-zero translation recover <tool_call> instead of wrapping as response', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: '<tool_call>{"name":"code_execution_tool","input":{"code":"git status"}}</tool_call>',
+      }),
+      'agent-zero',
+    );
+    const body = out.choices[0]?.message.content;
+    expect(typeof body).toBe('string');
+    const parsed = JSON.parse(body as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.code).toBe('git status');
   });
 });
 

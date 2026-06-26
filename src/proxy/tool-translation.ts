@@ -702,6 +702,46 @@ export function parseXmlFunctionCall(content: string): CanonicalCall | null {
   return { ...canon, preface };
 }
 
+export function parseToolCallJsonXml(content: string): CanonicalCall | null {
+  const match = /<tool_call\b[^>]*>\s*([\s\S]*?)\s*<\/tool_call>/i.exec(content);
+  if (!match || typeof match[1] !== 'string') return null;
+
+  const rawBlock = stripFences(match[1]).trim();
+  if (!rawBlock.startsWith('{') && !rawBlock.startsWith('[')) return null;
+
+  const candidates = [rawBlock, escapeControlCharsInsideJsonStrings(rawBlock)];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      const firstCall = Array.isArray(parsed) ? parsed[0] : parsed;
+      if (!isRecord(firstCall)) continue;
+
+      const toolName =
+        typeof firstCall.tool_name === 'string'
+          ? firstCall.tool_name
+          : typeof firstCall.name === 'string'
+            ? firstCall.name
+            : null;
+      if (!toolName) continue;
+
+      const toolArgs = firstCall.tool_args ?? firstCall.input ?? firstCall.arguments;
+      const fallbackArgs = Object.fromEntries(
+        Object.entries(firstCall).filter(
+          ([key]) => !['tool_name', 'name', 'tool_args', 'input', 'arguments'].includes(key),
+        ),
+      );
+      const args = isRecord(toolArgs) ? toolArgs : fallbackArgs;
+      const preface = content.slice(0, match.index).trim();
+      const canon = canonicalize(toolName, args);
+      return { ...canon, preface };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 export function parseBareJsonToolCall(content: string): CanonicalCall | null {
   const trimmed = stripFences(content).trim();
   const starts = [trimmed.indexOf('{'), trimmed.indexOf('[')].filter((index) => index >= 0);
@@ -1201,6 +1241,7 @@ export function parseUpstreamCall(message: ChatMessage | undefined): CanonicalCa
       ? (parseAgentZeroEnvelope(message.content) ??
         parseAnswerOperatorPluginXml(message.content) ??
         parseXmlFunctionCall(message.content) ??
+        parseToolCallJsonXml(message.content) ??
         parseBareJsonToolCall(message.content) ??
         parseFencedYamlToolCall(message.content) ??
         parseExecuteCommandXml(message.content) ??
