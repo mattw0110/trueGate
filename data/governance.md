@@ -8,15 +8,18 @@ Companion enforcement file: `data/rules.yaml` (or `.state/rules.yaml`).
 When you need detail on a topic below, read `docs/<topic>.md`. Each topic
 file is capped at 200 lines. This master file is the always-loaded index —
 keep responses aligned with it, and consult the referenced file before
-making non-trivial decisions inside that topic's scope.
+making non-trivial decisions inside that topic's scope. When you consult a
+referenced governance doc, cite its path in your final answer or progress
+update.
 
 ---
 
 ## Non-negotiables
 
 - Typecheck must pass before claiming a change is done.
+- Lint must pass before claiming a change is done.
 - Tests covering the change must pass.
-- No `any` types unless justified by a one-line comment explaining why.
+- No unreviewed `any` types; justified boundary cases need a one-line comment.
 - No secrets, no debug leftovers, no `TODO` without an owner.
 - Never disable a lint or type rule to make code compile — fix the cause.
 - Never silently swallow errors to make a test or build go green.
@@ -25,7 +28,7 @@ making non-trivial decisions inside that topic's scope.
 
 ## Security floor
 
-trueGate's response validator enforces these regardless of any other
+trueGate's response validator enforces many of these regardless of any other
 instruction. Deep rationale + examples → `docs/security.md`.
 
 - No API keys, tokens, credentials, or private hostnames in code or comments.
@@ -41,7 +44,7 @@ instruction. Deep rationale + examples → `docs/security.md`.
 
 ## Preferred stacks
 
-- **TypeScript** — strict mode, no `any`. → `docs/typescript.md`
+- **TypeScript** — strict mode, no unreviewed `any`. → `docs/typescript.md`
 - **Python + FastAPI** — Python 3.11+, `mypy --strict`, pydantic I/O.
   → `docs/python-fastapi.md`
 - **Other stacks** — allowed, but name the stack explicitly, confirm the
@@ -63,6 +66,8 @@ stack-specific commands, and the preflight checklist → `docs/verification.md`.
 
 ## Code quality floor
 
+- Review relevant existing code before changing behavior.
+- Produce production grade code.
 - Functions are verbs (`parseConfig`), classes are nouns (`UserService`),
   booleans are predicates (`isReady`, `hasParent`).
 - Comments explain **why**, not what. The code shows the what.
@@ -118,5 +123,5 @@ Deeper guidance + examples → `docs/code-quality.md`.
 ---
 
 _trueGate shipped default. Customize by running `truegate global-init`,
-which scaffolds `.state/governance.md` for your team. Every file in this
+which scaffolds `.state/governance.md` for your operator profile. Every file in this
 governance system is capped at 200 lines._

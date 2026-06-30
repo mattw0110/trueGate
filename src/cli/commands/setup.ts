@@ -3,7 +3,6 @@ import { stdin as input, stdout as output } from 'node:process';
 import {
   readUserConfig,
   writeUserConfig,
-  userConfigPath,
   type UserConfig,
 } from '../../config/user-config.js';
 import { PROVIDER_BASE_URLS, DEFAULT_PORT } from '../../config/constants.js';

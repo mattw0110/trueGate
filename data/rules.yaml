@@ -109,9 +109,15 @@ dangerousPatterns:
   - pattern: ":\\s*any\\b"
     severity: warn
     message: 'TypeScript `any` annotation — justify with a comment or narrow the type'
-  - pattern: "from\\s+typing\\s+import\\s+[^\\n]*\\bAny\\b"
+  - pattern: "->\\s*Any\\b"
     severity: warn
-    message: 'Python `Any` imported — prefer a concrete type or `object` / generics'
+    message: 'Python return type `Any` — justify the boundary or use a concrete type'
+  - pattern: ":\\s*Any\\b"
+    severity: warn
+    message: 'Python `Any` annotation — justify the boundary or use a concrete type'
+  - pattern: "\\b(?:dict|list|set|tuple|Mapping|MutableMapping|Sequence|Iterable)\\[[^\\n\\]]*\\bAny\\b[^\\n\\]]*\\]"
+    severity: warn
+    message: 'Python container typed with `Any` — justify the boundary or narrow the value type'
 
   # ─── Debugging leftovers ───────────────────────────────────────────────
   - pattern: "console\\.log\\("

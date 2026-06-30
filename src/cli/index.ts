@@ -104,6 +104,9 @@ program
   .option('-n, --lines <count>', 'Number of existing log lines to print first', '50')
   .option('--pretty', 'Render compact human-readable log lines')
   .option('--summary', 'Summarize recent governance decisions and rule hits')
+  .option('--hash <hash>', 'Summarize only events for a governance hash')
+  .option('--current-governance', 'Summarize only events for the currently loaded governance hash')
+  .option('--decision <decision>', 'Filter by decision: pass, warn, block, or override_allowed')
   .option('--no-color', 'Disable ANSI colors in pretty log output')
   .action(
     async (options: {
@@ -112,6 +115,9 @@ program
       pretty?: boolean;
       color?: boolean;
       summary?: boolean;
+      hash?: string;
+      currentGovernance?: boolean;
+      decision?: string;
     }) => {
     await runLogs(options);
   },

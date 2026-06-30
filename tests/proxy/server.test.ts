@@ -4,7 +4,7 @@ import { buildServer } from '../../src/proxy/server.js';
 import { clearBlockOverrides } from '../../src/proxy/block-override.js';
 import { flushGovernanceLog } from '../../src/governance/events/logger.js';
 import type { TrueGateConfig } from '../../src/types/runtime.js';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';

@@ -24,6 +24,12 @@ export interface GovernanceLogEvent {
 const MAX_MATCH_LENGTH = 200;
 let writeQueue: Promise<void> = Promise.resolve();
 
+type LoggedGovernanceTrace = Omit<GovernanceTrace, 'anchors' | 'ruleRefs' | 'guidanceItems'> & {
+  anchors?: GovernanceTrace['anchors'];
+  ruleRefs?: GovernanceTrace['ruleRefs'];
+  guidanceItems?: GovernanceTrace['guidanceItems'];
+};
+
 export function governanceLogPath(): string {
   return join(stateDir(), 'logs', 'governance.ndjson');
 }
@@ -54,6 +60,32 @@ function redactedIssues(issues: ValidationIssue[] | undefined): ValidationIssue[
   });
 }
 
+function shouldExpandGovernance(event: GovernanceLogEvent): boolean {
+  return event.decision !== 'pass' || (event.issues?.length ?? 0) > 0;
+}
+
+function compactGovernanceTrace(governance: GovernanceTrace | undefined): LoggedGovernanceTrace | undefined {
+  if (!governance) return undefined;
+  return {
+    bundleSource: governance.bundleSource,
+    ...(governance.governancePath !== undefined ? { governancePath: governance.governancePath } : {}),
+    ...(governance.rulesPath !== undefined ? { rulesPath: governance.rulesPath } : {}),
+    ...(governance.governanceHash !== undefined ? { governanceHash: governance.governanceHash } : {}),
+    ...(governance.rulesHash !== undefined ? { rulesHash: governance.rulesHash } : {}),
+  };
+}
+
+function matchingRuleRefs(
+  issues: ValidationIssue[] | undefined,
+  governance: GovernanceTrace | undefined,
+): GovernanceTrace['ruleRefs'] {
+  if (!issues || issues.length === 0) return undefined;
+  const refs = issues
+    .map((issue) => issueRuleRef(issue, governance))
+    .filter((ref): ref is NonNullable<GovernanceTrace['ruleRefs']>[number] => ref !== undefined);
+  return refs.length > 0 ? refs : undefined;
+}
+
 function tokensFor(value: string): string[] {
   return value
     .toLowerCase()
@@ -73,8 +105,21 @@ function fallbackId(prefix: string, value: string | undefined): string {
 
 function relatedGuidance(
   issue: { rule?: string; message?: string; match?: string },
-  governance: GovernanceTrace | undefined,
+  governance: LoggedGovernanceTrace | undefined,
 ): Array<{ id: string; text: string }> {
+  return relatedGuidanceItems(issue, governance).map((item) => {
+    const file = governance?.governancePath ? basename(governance.governancePath) : 'governance.md';
+    return {
+      id: item.id ?? fallbackId('guidance', item.text),
+      text: `${file}:${item.line}-${item.endLine} ${item.section}: ${item.text}`,
+    };
+  });
+}
+
+function relatedGuidanceItems(
+  issue: { rule?: string; message?: string; match?: string },
+  governance: LoggedGovernanceTrace | undefined,
+): NonNullable<GovernanceTrace['guidanceItems']> {
   const items = governance?.guidanceItems ?? [];
   if (items.length === 0) return [];
   const issueTokens = new Set(
@@ -93,18 +138,30 @@ function relatedGuidance(
     .filter(({ score }) => score >= 8)
     .sort((a, b) => b.score - a.score)
     .slice(0, 2)
-    .map(({ item }) => {
-      const file = governance?.governancePath ? basename(governance.governancePath) : 'governance.md';
-      return {
-        id: item.id ?? fallbackId('guidance', item.text),
-        text: `${file}:${item.line}-${item.endLine} ${item.section}: ${item.text}`,
-      };
-    });
+    .map(({ item }) => item);
+}
+
+function matchingGuidanceItems(
+  issues: ValidationIssue[] | undefined,
+  governance: GovernanceTrace | undefined,
+): GovernanceTrace['guidanceItems'] {
+  if (!issues || issues.length === 0) return undefined;
+  const seen = new Set<string>();
+  const items: NonNullable<GovernanceTrace['guidanceItems']> = [];
+  for (const issue of issues) {
+    for (const item of relatedGuidanceItems(issue, governance)) {
+      const key = item.id ?? `${item.section}:${item.line}:${item.text}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(item);
+    }
+  }
+  return items.length > 0 ? items : undefined;
 }
 
 function issueRuleRef(
   issue: { rule?: string; message?: string; match?: string },
-  governance: GovernanceTrace | undefined,
+  governance: LoggedGovernanceTrace | undefined,
 ) {
   return governance?.ruleRefs?.find(
     (entry) =>
@@ -115,12 +172,32 @@ function issueRuleRef(
   );
 }
 
+function diagnosticGovernanceTrace(
+  governance: GovernanceTrace | undefined,
+  issues: ValidationIssue[] | undefined,
+): LoggedGovernanceTrace | undefined {
+  const compact = compactGovernanceTrace(governance);
+  if (!compact || !governance) return compact;
+  const ruleRefs = matchingRuleRefs(issues, governance);
+  const guidanceItems = matchingGuidanceItems(issues, governance);
+  return {
+    ...compact,
+    ...(governance.anchors.length > 0 ? { anchors: governance.anchors } : {}),
+    ...(ruleRefs !== undefined ? { ruleRefs } : {}),
+    ...(guidanceItems !== undefined ? { guidanceItems } : {}),
+  };
+}
+
 export async function logGovernanceEvent(event: GovernanceLogEvent): Promise<void> {
   const path = governanceLogPath();
+  const governance = shouldExpandGovernance(event)
+    ? diagnosticGovernanceTrace(event.governance, event.issues)
+    : compactGovernanceTrace(event.governance);
   const record = {
     ts: new Date().toISOString(),
     ...event,
     issues: redactedIssues(event.issues),
+    governance,
   };
 
   writeQueue = writeQueue.then(async () => {
@@ -172,7 +249,7 @@ function prettyLine(line: string): string {
       model?: string;
       client?: string;
       issues?: Array<{ rule?: string; message?: string; match?: string }>;
-      governance?: GovernanceTrace;
+      governance?: LoggedGovernanceTrace;
       overrideOffered?: boolean;
       overrideUsed?: boolean;
     };
@@ -274,6 +351,7 @@ export async function printGovernanceLog(options: {
   lines?: number;
   pretty?: boolean;
   color?: boolean;
+  decision?: GovernanceDecision;
   stream?: NodeJS.WritableStream;
 } = {}): Promise<void> {
   const stream = options.stream ?? process.stdout;
@@ -285,7 +363,17 @@ export async function printGovernanceLog(options: {
     const existing = await stat(path);
     position = existing.size;
     const content = await readFile(path, 'utf-8');
-    const tail = content.trimEnd().split('\n').slice(-lines).join('\n');
+    const logLines = content.trimEnd().split('\n').filter(Boolean);
+    const filtered = options.decision
+      ? logLines.filter((line) => {
+          try {
+            return (JSON.parse(line) as { decision?: string }).decision === options.decision;
+          } catch {
+            return false;
+          }
+        })
+      : logLines;
+    const tail = filtered.slice(-lines).join('\n');
     writeLogLines(stream, tail, options.pretty, options.color);
   } catch {
     stream.write(`No governance log yet: ${path}\n`);
@@ -310,7 +398,20 @@ export async function printGovernanceLog(options: {
         chunk += data;
       });
       reader.on('end', () => {
-        writeLogLines(stream, chunk, true, options.color);
+        const filtered = options.decision
+          ? chunk
+              .trimEnd()
+              .split('\n')
+              .filter((line) => {
+                try {
+                  return (JSON.parse(line) as { decision?: string }).decision === options.decision;
+                } catch {
+                  return false;
+                }
+              })
+              .join('\n')
+          : chunk;
+        writeLogLines(stream, filtered, true, options.color);
       });
     } catch {
       /* wait for the file to appear */
@@ -328,6 +429,8 @@ function sortedCounts(map: Map<string, number>): Array<[string, number]> {
 
 export async function printGovernanceSummary(options: {
   lines?: number;
+  governanceHash?: string;
+  decision?: GovernanceDecision;
   stream?: NodeJS.WritableStream;
 } = {}): Promise<void> {
   const stream = options.stream ?? process.stdout;
@@ -340,11 +443,10 @@ export async function printGovernanceSummary(options: {
     return;
   }
 
-  const records = raw
+  const parsedRecords = raw
     .trim()
     .split('\n')
     .filter(Boolean)
-    .slice(-(options.lines ?? 500))
     .flatMap((line) => {
       try {
         return [JSON.parse(line) as GovernanceLogEvent & { ts?: string }];
@@ -352,13 +454,34 @@ export async function printGovernanceSummary(options: {
         return [];
       }
     });
+  const hashFilteredRecords = options.governanceHash
+    ? parsedRecords.filter((record) => record.governance?.governanceHash === options.governanceHash)
+    : parsedRecords;
+  const filteredRecords = options.decision
+    ? hashFilteredRecords.filter((record) => record.decision === options.decision)
+    : hashFilteredRecords;
+  const records = filteredRecords.slice(-(options.lines ?? 500));
 
   const decisions = new Map<string, number>();
   const rules = new Map<string, number>();
   const guidance = new Map<string, number>();
+  const byModel = new Map<string, number>();
+  const warningsByModel = new Map<string, number>();
+  const byClient = new Map<string, number>();
+  const warningsByClient = new Map<string, number>();
+  let warningCount = 0;
 
   for (const record of records) {
     increment(decisions, record.decision);
+    const model = [record.provider, record.model].filter(Boolean).join('/') || 'unknown';
+    const client = record.client ?? 'unknown';
+    increment(byModel, model);
+    increment(byClient, client);
+    if (record.decision === 'warn' || record.decision === 'block') {
+      warningCount += 1;
+      increment(warningsByModel, model);
+      increment(warningsByClient, client);
+    }
     for (const issue of record.issues ?? []) {
       const ref = issueRuleRef(issue, record.governance);
       const key = ref
@@ -371,10 +494,31 @@ export async function printGovernanceSummary(options: {
     }
   }
 
-  stream.write(`Governance log summary (${records.length} event${records.length === 1 ? '' : 's'})\n\n`);
+  const filters = [
+    options.governanceHash ? `governance=${options.governanceHash}` : undefined,
+    options.decision ? `decision=${options.decision}` : undefined,
+  ].filter(Boolean);
+  const filterText = filters.length > 0 ? `, ${filters.join(', ')}` : '';
+  stream.write(`Governance log summary (${records.length} event${records.length === 1 ? '' : 's'}${filterText})\n\n`);
   stream.write('Decisions\n');
   for (const [decision, count] of sortedCounts(decisions)) {
     stream.write(`  ${decision.padEnd(16)} ${count}\n`);
+  }
+  const warningRate = records.length > 0 ? (warningCount / records.length) * 100 : 0;
+  stream.write(`\nWarning/block rate: ${warningRate.toFixed(1)}% (${warningCount}/${records.length})\n`);
+
+  stream.write('\nBy model\n');
+  for (const [model, count] of sortedCounts(byModel).slice(0, 10)) {
+    const warnings = warningsByModel.get(model) ?? 0;
+    const rate = count > 0 ? (warnings / count) * 100 : 0;
+    stream.write(`  ${String(count).padStart(4)}  ${model}  warn/block=${warnings} (${rate.toFixed(1)}%)\n`);
+  }
+
+  stream.write('\nBy client\n');
+  for (const [client, count] of sortedCounts(byClient).slice(0, 10)) {
+    const warnings = warningsByClient.get(client) ?? 0;
+    const rate = count > 0 ? (warnings / count) * 100 : 0;
+    stream.write(`  ${String(count).padStart(4)}  ${client}  warn/block=${warnings} (${rate.toFixed(1)}%)\n`);
   }
 
   stream.write('\nTop rules\n');
