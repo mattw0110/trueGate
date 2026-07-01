@@ -122,6 +122,20 @@ describe('canonicalize — new mappings', () => {
     expect(c.args.patch_text).toContain('+d');
   });
 
+  it('maps stale Claude str_replace_based_edit_tool → text_editor patch', () => {
+    const c = canonicalize('str_replace_based_edit_tool', {
+      file_path: '/tmp/x.py',
+      old_string: 'before',
+      new_string: 'after',
+    });
+    expect(c.name).toBe('text_editor');
+    expect(c.originalName).toBe('str_replace_based_edit_tool');
+    expect(c.args.action).toBe('patch');
+    expect(c.args.path).toBe('/tmp/x.py');
+    expect(c.args.patch_text).toContain('-before');
+    expect(c.args.patch_text).toContain('+after');
+  });
+
   it('passes native agent-zero tools through', () => {
     const c = canonicalize('document_query', { document: '/x.pdf' });
     expect(c.name).toBe('document_query');
@@ -308,6 +322,28 @@ describe('translateResponseToConvention', () => {
     expect(env.tool_name).toBe('response');
     expect(String(env.tool_args.text)).toContain('text_editor');
     expect(String(env.tool_args.text)).toContain('not currently advertised');
+  });
+
+  it('agent-zero client + stale Claude edit tool → emits advertised text_editor envelope', () => {
+    const r = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content:
+          '<function_calls><invoke name="str_replace_based_edit_tool"><parameter name="file_path">/tmp/foo</parameter><parameter name="old_string">before</parameter><parameter name="new_string">after</parameter></invoke></function_calls>',
+      }),
+      'agent-zero',
+      undefined,
+      new Set(['response', 'text_editor', 'code_execution_tool']),
+    );
+    const env = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: Record<string, unknown>;
+    };
+    expect(env.tool_name).toBe('text_editor');
+    expect(env.tool_args.action).toBe('patch');
+    expect(env.tool_args.path).toBe('/tmp/foo');
+    expect(String(env.tool_args.patch_text)).toContain('-before');
+    expect(String(env.tool_args.patch_text)).toContain('+after');
   });
 
   it('agent-zero client + envelope with trailing chars → parses, no double-wrap', () => {
