@@ -1,7 +1,7 @@
 import { readUserConfig, resolveConfig, type ConfigOverrides } from '../../config/user-config.js';
 import { buildServer } from '../../proxy/server.js';
 import { buildUpstreamRegistry, formatRegistrySummary } from '../../registry/upstream-registry.js';
-import type { ProviderName } from '../../types/runtime.js';
+import type { PolicyMode, ProviderName } from '../../types/runtime.js';
 
 export interface ServeFlags {
   provider?: string;
@@ -13,6 +13,8 @@ export interface ServeFlags {
   anthropicKey?: string;
   githubToken?: string;
   stripClientSystem?: boolean;
+  governanceInjection?: boolean;
+  policyMode?: string;
   responseMarker?: string | false;
   /** Commander `--no-auto` produces `auto: false`. Default is true. */
   auto?: boolean;
@@ -28,15 +30,24 @@ const VALID: ProviderName[] = [
   'custom',
 ];
 
+const POLICY_MODES: PolicyMode[] = ['off', 'targeted', 'light', 'full'];
+
 function parseProvider(raw: string | undefined): ProviderName | undefined {
   if (raw === undefined) return undefined;
   if ((VALID as string[]).includes(raw)) return raw as ProviderName;
   throw new Error(`Unknown --provider: ${raw}. Valid: ${VALID.join(', ')}`);
 }
 
+function parsePolicyMode(raw: string | undefined): PolicyMode | undefined {
+  if (raw === undefined) return undefined;
+  if ((POLICY_MODES as string[]).includes(raw)) return raw as PolicyMode;
+  throw new Error(`Unknown --policy-mode: ${raw}. Valid: ${POLICY_MODES.join(', ')}`);
+}
+
 export async function runServe(flags: ServeFlags): Promise<void> {
   const overrides: ConfigOverrides = {};
   const provider = parseProvider(flags.provider);
+  const policyMode = parsePolicyMode(flags.policyMode);
   if (provider) {
     overrides.provider = provider;
     overrides.providerForced = true;
@@ -48,6 +59,9 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   if (flags.anthropicKey) overrides.anthropicApiKey = flags.anthropicKey;
   if (flags.githubToken) overrides.githubToken = flags.githubToken;
   if (flags.stripClientSystem !== undefined) overrides.stripClientSystem = flags.stripClientSystem;
+  if (policyMode) overrides.policyMode = policyMode;
+  else if (flags.governanceInjection !== undefined)
+    overrides.policyMode = flags.governanceInjection ? 'full' : 'off';
   if (flags.responseMarker === false) overrides.responseMarker = '';
   else if (typeof flags.responseMarker === 'string')
     overrides.responseMarker = flags.responseMarker;
@@ -75,7 +89,8 @@ export async function runServe(flags: ServeFlags): Promise<void> {
   try {
     await server.listen({ port: config.port, host: '0.0.0.0' });
     console.log(`trueGate proxy listening on http://localhost:${config.port}`);
-    console.log(`  → governance: data/ + .state/ (operator bundle, repo-local)`);
+    console.log(`  → policy mode: ${config.policyMode ?? 'targeted'}`);
+    console.log(`  → governance: response validation + logs always on`);
   } catch (err) {
     console.error('Failed to start server:', err);
     process.exit(1);

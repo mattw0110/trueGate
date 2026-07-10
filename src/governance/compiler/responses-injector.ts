@@ -1,8 +1,12 @@
 import type { CompiledContext } from '../../types/governance.js';
 import type { ResponsesRequest } from '../../types/responses-api.js';
+import type { PolicyMode } from '../../types/runtime.js';
+import { governancePromptForMode } from './policy-mode.js';
 
 export interface ResponsesInjectOptions {
   stripClientSystem?: boolean;
+  policyMode?: PolicyMode;
+  sourceText?: string;
 }
 
 export function injectGovernanceIntoResponses(
@@ -10,7 +14,7 @@ export function injectGovernanceIntoResponses(
   context: CompiledContext,
   options: ResponsesInjectOptions = {},
 ): ResponsesRequest {
-  const governance = context.systemMessage.trim();
+  const governance = governancePromptForMode(context, options.policyMode, options.sourceText);
 
   if (options.stripClientSystem) {
     if (!governance) {

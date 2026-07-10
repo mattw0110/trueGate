@@ -4,7 +4,7 @@
 
 # trueGate
 
-> Self-contained governance proxy for AI coding tools. Routes requests by model name, injects operator-wide guidance, and validates responses. Install it once, point every tool at `http://localhost:8457`, and keep governance out of your project repos.
+> Local LLM gateway for routing, light policy checks, and Agent0 compatibility. Point tools at `http://localhost:8457` when you need model-name routing, response validation, and cleanup/translation between Claude-style output and Agent Zero's JSON envelope.
 
 ```
 ┌──────────────┐   ┌────────────┐   ┌───────────────┐
@@ -15,16 +15,49 @@
                    model name
 ```
 
-## What it does
+## What it actually is
 
-- **Auto-routes by model name — start with no flags.** trueGate probes every reachable upstream ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), Ollama, LM Studio, OpenAI, Anthropic, GitHub Copilot) at startup and dispatches each request to the right backend automatically.
-- **Operator-wide governance — ships with a governance bundle in data/.** Override it with your own files in `.state/`.
-- **Response validation** — blocks dangerous output (`rm -rf /`, leaked `sk-` keys, `DROP TABLE`, pipe-to-shell) and warns on policy drift (forbidden deps, `any` types).
-- **Tool-call aware** — scans `tool_use.input` and `function_call.arguments`, not just plain text.
-- **Every major API** — `/v1/messages` (Claude Code, Anthropic SDK), `/v1/chat/completions` (Cursor, OpenAI SDK, Continue.dev), `/v1/responses` (Codex CLI). **Agent Zero envelope requests handled natively.**
-- **Transparent** — every response carries `— trueGate · provider/model` and an `x-truegate-upstream` header.
-- **Local + hosted friendly** — use hosted Claude/GPT through CLIProxyAPI or direct API keys, local Ollama/LM Studio for offline fallback, or both in auto-routing mode.
-- **Self-contained** — `git clone && npm install && npm start`. Runtime state lives in this repo's `.state/` and `vendor/` directories unless you intentionally point trueGate at a system-wide provider.
+trueGate is a pragmatic compatibility gateway. It is not an autonomous coding agent, not a replacement for Agent0, and not a guarantee that every upstream model will obey a tool protocol.
+
+It does three useful things:
+
+- **Routes by model name.** trueGate probes reachable upstreams ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI), Ollama, LM Studio, OpenAI, Anthropic, GitHub Copilot) and dispatches each request to the backend that advertises the requested model.
+- **Keeps Agent0 envelopes cleaner.** For Agent Zero / Agent0 requests, trueGate removes its own visible markers/governance text from assistant history, avoids adding trueGate footers to Agent0 JSON, and translates high-confidence Claude/Codex tool-call drift back into Agent0 envelopes.
+- **Validates obvious dangerous output.** It can block or warn on patterns such as destructive shell commands, leaked API keys, `DROP TABLE`, pipe-to-shell installers, forbidden dependencies, and other configured rules.
+
+It also provides OpenAI-compatible `/v1/chat/completions`, Anthropic-compatible `/v1/messages`, and OpenAI Responses-compatible `/v1/responses` endpoints.
+
+## What it is not
+
+- It is not a general “governance brain” that makes models code better by itself.
+- It does not make Claude Code natively speak Agent0. It translates common, tested formats and logs the rest.
+- It does not safely invent missing tool arguments. If the upstream emits only `Invoking <tool>` with no command/path/body, trueGate will not guess.
+- It should not stuff branded signatures, route names, or governance footers into Agent0 assistant history. Agent0 turns use headers/logs for provenance instead.
+
+## Agent0 Compatibility
+
+Agent0 expects assistant responses shaped like:
+
+```json
+{
+  "thoughts": ["short reasoning"],
+  "headline": "Invoking tool",
+  "tool_name": "code_execution_tool",
+  "tool_args": { "runtime": "terminal", "code": "pwd" }
+}
+```
+
+When upstream models drift, trueGate attempts conservative recovery for known forms:
+
+- Native Agent0 envelopes, including fenced or slightly damaged JSON.
+- OpenAI and Anthropic tool calls.
+- Claude Code `_calls` JSON.
+- Claude markdown tool lines such as `**Read** \`path\``.
+- Markdown tool headers followed by fenced shell code.
+- Bare `{ "runtime": "terminal", "code": "..." }` shell objects.
+- Unfenced terminal blocks after prose when the command block is clear.
+
+For ordinary final prose, trueGate wraps the text as `tool_name: "response"` without logging it as a failure. For suspicious action-shaped misses, it logs warnings so the adapter can be improved deliberately.
 
 ## Quickstart
 
@@ -58,7 +91,7 @@ curl -sS http://localhost:8457/v1/chat/completions \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"reply exactly: ok"}],"max_tokens":20}'
 ```
 
-Expected response text includes:
+Expected response text for normal, non-Agent0 chat includes:
 
 ```
 ok
@@ -89,6 +122,7 @@ ok
 | `--no-auto` | Skip startup probes; require explicit `--provider` |
 | `--port <n>` | Listen port (default 8457) |
 | `--token <value>` | API token for the active provider |
+| `--policy-mode <mode>` | Prompt policy mode: `off`, `targeted`, `light`, or `full` (default `targeted`) |
 | (none) | Auto-mode: probe all upstreams, route by model name |
 | `--no-response-marker` | Disable the trailing marker |
 
@@ -108,12 +142,23 @@ trueGate/
   dist/
 ```
 
-## Governance
+## Policy Checks
 
 ```bash
 truegate global-init   # writes .state/governance.md + .state/rules.yaml
 truegate inspect       # see exactly what's loaded
 ```
+
+By default, trueGate injects a short targeted snippet based on the current
+request. It still routes requests, validates responses, writes logs, and adds
+the upstream marker for normal chat responses. Agent0 JSON-envelope responses do
+not get visible trueGate markers because those markers become assistant-history
+pollution.
+
+Use `--policy-mode off` for no prompt injection, `--policy-mode light` for a
+generic reminder, or `--policy-mode full` to inject the full operator bundle.
+For Agent0 troubleshooting, start with `targeted` or `off`; heavy prompt
+injection can compete with Agent0's own tool contract.
 
 See [governance.md](./docs/governance.md) for how to write rules.
 

@@ -28,6 +28,24 @@ import type {
   AnthropicContentBlock,
 } from '../../types/anthropic.js';
 
+function contentText(content: AnthropicNativeRequest['messages'][number]['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((block) => (block.type === 'text' && 'text' in block ? block.text : ''))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function anthropicRequestText(body: AnthropicNativeRequest): string {
+  const system =
+    typeof body.system === 'string'
+      ? body.system
+      : body.system?.map((block) => block.text).join('\n') ?? '';
+  return [system, ...body.messages.map((message) => contentText(message.content))]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 /**
  * Append the trueGate marker to the LAST text block in the content array so
  * IDEs that render markdown see "— trueGate" on its own line below the
@@ -84,9 +102,12 @@ export function registerMessagesRoute(
     let body = request.body;
 
     if (context) {
-      body = injectGovernanceIntoAnthropic(body, context, {
+      const injectOptions: Parameters<typeof injectGovernanceIntoAnthropic>[2] = {
         stripClientSystem: config.stripClientSystem ?? false,
-      });
+      };
+      if (config.policyMode !== undefined) injectOptions.policyMode = config.policyMode;
+      injectOptions.sourceText = anthropicRequestText(body);
+      body = injectGovernanceIntoAnthropic(body, context, injectOptions);
     } else if (config.stripClientSystem) {
       const { system: _drop, ...rest } = body;
       body = rest as AnthropicNativeRequest;

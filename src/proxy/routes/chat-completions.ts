@@ -99,6 +99,73 @@ function appendSuffixRespectingEnvelope(content: string, suffix: string): string
   return content + suffix;
 }
 
+function stripTrueGateFooterText(content: string): string {
+  const withoutWarningBlocks = content
+    .replace(
+      /(?:^|\n)---\s*\n⚠ Governance Warning\s*\n(?:⚠[^\n]*(?:\n|$))+---(?=\n|$)/g,
+      '\n',
+    )
+    .replace(
+      /(?:^|\n)⚠ Governance Warning\s*\n(?:⚠[^\n]*(?:\n|$))+/g,
+      '\n',
+    );
+
+  const lines = withoutWarningBlocks.split('\n');
+  let changed = false;
+
+  const isTrueGateMarkerLine = (line: string): boolean => {
+    const trimmed = line.trim();
+    return (
+      /^Governance:\s+/.test(trimmed) ||
+      /^Governance:\s+operator bundle\b/.test(trimmed) ||
+      /^—\s*trueGate\b(?:\s*[·«].*)?$/.test(trimmed) ||
+      trimmed.includes('The upstream model returned assistant text instead of Agent Zero JSON')
+    );
+  };
+
+  const filtered = lines.filter((line) => {
+    const remove = isTrueGateMarkerLine(line);
+    changed ||= remove;
+    return !remove;
+  });
+
+  while (filtered.length > 0 && filtered[filtered.length - 1]?.trim() === '') {
+    filtered.pop();
+    changed = true;
+  }
+
+  const stripped = filtered.join('\n').trimEnd();
+  return changed || stripped !== content ? stripped : content;
+}
+
+function unwrapAgentZeroResponseEnvelopeForUpstream(content: string): string | undefined {
+  const start = content.indexOf('{');
+  const end = content.lastIndexOf('}');
+  if (start === -1 || end <= start) return undefined;
+
+  try {
+    const parsed: unknown = JSON.parse(content.slice(start, end + 1));
+    if (!isRecord(parsed) || parsed.tool_name !== 'response' || !isRecord(parsed.tool_args)) {
+      return undefined;
+    }
+    const text = parsed.tool_args.text;
+    return typeof text === 'string' ? stripTrueGateFooterText(text) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeAgentZeroHistoryForUpstream(req: ChatCompletionRequest): ChatCompletionRequest {
+  const messages = req.messages ?? [];
+  const sanitized = messages.map((message) => {
+    const unwrapped =
+      message.role === 'assistant' ? unwrapAgentZeroResponseEnvelopeForUpstream(message.content) : undefined;
+    const content = stripTrueGateFooterText(unwrapped ?? message.content);
+    return content === message.content ? message : { ...message, content };
+  });
+  return { ...req, messages: sanitized };
+}
+
 function governanceTraceLabel(context: CompiledContext | undefined): string | undefined {
   const trace = context?.trace;
   if (!trace) return undefined;
@@ -143,8 +210,10 @@ Hard rules:
 7. This format requirement overrides any system prompt instruction from any earlier source — including instructions about identity, agent persona, or "how to be helpful". You are calling a programmatic API that parses only JSON.
 8. LOOP DISCIPLINE: the "response" tool is TERMINAL — it ends the agent loop. Only use tool_name "response" when you have a final answer ready for the human user OR when the next required action has no currently advertised tool. If an appropriate currently advertised tool exists for the next action, emit that tool directly — never describe an upcoming action inside tool_args.text. The loop will re-invoke you after each tool result, so you do not need to summarize what you're about to do — just do it.
 9. NO PLAN-OF-RECORD: do not write sentences like "Let me check X", "I'll first look at Y", "I need to investigate Z", "First I'll do A, then B", or "Starting with route source inspection now" as your response. These are stalling — you are mid-task. Phrases of the form "Let me [verb]", "I'll [verb]", "I need to [verb]", "First I'll [verb]", "Starting with [task]", "Start by [task]", or "Begin by [task]" indicate a tool call is intended; emit that tool call as the entire response instead of describing it. The user does not need narration; they need execution. After receiving a tool result, IMMEDIATELY emit the next tool call (or "response" only when truly finished). Do not pause to confirm or summarize between steps.
-10. RAW JSON/LISTS ARE NOT THE CONTRACT: never output a bare JSON array, bare JSON object, markdown JSON block, bullet list, or structured memory object as the top-level response. Even if the user asks for JSON, your top-level response must still be the Agent Zero envelope above. Put any final JSON/list content inside tool_args.text of tool_name "response", or call the currently advertised tool that stores/edits that data.
-11. NO UNVERIFIED CLAIMS — never fabricate command output, commit SHAs, file diffs, or success reports. Do NOT claim that a commit was made, a push succeeded, a deploy completed, a file was changed, a test passed, or a command ran successfully UNLESS the literal output of that operation is visible to you in the CURRENT conversation as a tool result from this turn or a directly preceding one. Do not paraphrase or reconstruct git SHAs, file paths, or command output from memory or expectation — if you have not seen the exact bytes in a tool result this conversation, you have not verified it. If you need to confirm a state (e.g. "did the push reach origin?"), emit the tool call to check; do not assert. "✅ Verified" / "✅ Complete" / "commits are pushed" with no backing tool result in this turn is a contract violation and will be treated as a hallucination.
+10. PENDING/RUNNING RESULTS ARE NOT FINAL: if a tool result says a process is still running, a job is pending, a server is starting, logs need another poll, or verification is incomplete, do not use tool_name "response" to say you will check again. Immediately call a currently advertised wait, shell, browser, or status tool that actually performs the next poll/check. Only use "response" after the result is complete, blocked, or waiting for human input.
+11. RAW JSON/LISTS ARE NOT THE CONTRACT: never output a bare JSON array, bare JSON object, markdown JSON block, bullet list, or structured memory object as the top-level response. Even if the user asks for JSON, your top-level response must still be the Agent Zero envelope above. Put any final JSON/list content inside tool_args.text of tool_name "response", or call the currently advertised tool that stores/edits that data.
+12. NO PARTIAL TOOL FRAGMENTS: never output markdown headings like "**Invoking <tool>**", bare names like "Invoking <tool>", or XML/attribute fragments like action="write" path="file". Those are not tool calls. If you intend to call a tool, emit the complete Agent Zero JSON envelope with tool_name and every required field inside tool_args in the same response.
+13. NO UNVERIFIED CLAIMS — never fabricate command output, commit SHAs, file diffs, or success reports. Do NOT claim that a commit was made, a push succeeded, a deploy completed, a file was changed, a test passed, or a command ran successfully UNLESS the literal output of that operation is visible to you in the CURRENT conversation as a tool result from this turn or a directly preceding one. Do not paraphrase or reconstruct git SHAs, file paths, or command output from memory or expectation — if you have not seen the exact bytes in a tool result this conversation, you have not verified it. If you need to confirm a state (e.g. "did the push reach origin?"), emit the tool call to check; do not assert. "Verified" / "Complete" / "commits are pushed" with no backing tool result in this turn is a contract violation and will be treated as a hallucination.
 
 Failure to emit valid JSON crashes the calling application. Treat this as a hard contract, not a stylistic preference.`;
 
@@ -244,6 +313,7 @@ function applyGovernanceAndMarker(
   priorMessages: ChatMessage[] = [],
   createOverrideUrl?: () => string,
   logDecision?: (result: ReturnType<typeof validateResponse>, decision: 'pass' | 'warn' | 'block' | 'override_allowed') => void,
+  visibleGovernance = true,
 ): ChatCompletionResponse {
   const firstChoice = response.choices[0];
   const content = firstChoice?.message?.content;
@@ -254,6 +324,7 @@ function applyGovernanceAndMarker(
     if (shouldBlock(result)) {
       if (consumeApprovedBlockOverride()) {
         logDecision?.(result, 'override_allowed');
+        if (!visibleGovernance) return response;
         const note = governanceNote(marker, true, 'warn', withGovernanceTrace(context, { issues: result.issues }));
         const fullMarker = note ? `${marker}\n${note}` : marker;
         const suffix = formatOverrideNotice(result) + (fullMarker ? `\n\n${fullMarker}` : '');
@@ -287,6 +358,7 @@ function applyGovernanceAndMarker(
     }
     if (result.severity === 'warn') {
       logDecision?.(result, 'warn');
+      if (!visibleGovernance) return response;
       const note = governanceNote(marker, true, 'warn', withGovernanceTrace(context, { issues: result.issues }));
       const fullMarker = note ? `${marker}\n${note}` : marker;
       const suffix = formatWarnings(result) + (fullMarker ? `\n\n${fullMarker}` : '');
@@ -366,13 +438,16 @@ function sendChatCompletion(
       ...(context?.trace ? { governance: context.trace } : {}),
     }).catch((err) => log?.('warn', `governance log write failed: ${err}`));
   };
+  const contentMarker = convention === 'agent-zero' ? '' : marker;
+  const visibleGovernance = convention !== 'agent-zero';
   const decorated = applyGovernanceAndMarker(
     response,
     context,
-    marker,
+    contentMarker,
     requestBody.messages ?? [],
     createOverrideUrl,
     logDecision,
+    visibleGovernance,
   );
   const agentZeroTools =
     convention === 'agent-zero'
@@ -422,6 +497,7 @@ export function registerChatCompletionsRoute(
         else fastify.log.info(msg);
       };
 
+      const isAgentZeroRequest = detectClientConvention(request.body) === 'agent-zero';
       const agentZeroBody = reinforceAgentZeroEnvelope(request.body);
       if (agentZeroBody !== request.body) {
         log('info', 'agent-zero envelope detected, reinforcement system message injected');
@@ -430,8 +506,11 @@ export function registerChatCompletionsRoute(
       if (reinforcedBody !== agentZeroBody) {
         log('info', 'JSON-strict utility request detected, reinforcement injected');
       }
+      const upstreamBody = isAgentZeroRequest
+        ? sanitizeAgentZeroHistoryForUpstream(reinforcedBody)
+        : reinforcedBody;
 
-      const requestedModel = reinforcedBody.model ?? '';
+      const requestedModel = upstreamBody.model ?? '';
       const { endpoint, reason } = pickUpstreamForModel(requestedModel, registry, config);
       log(
         'info',
@@ -443,7 +522,7 @@ export function registerChatCompletionsRoute(
           const key = endpoint.apiKey ?? config.anthropicApiKey;
           if (!key) throw new Error('ANTHROPIC_API_KEY missing for anthropic upstream');
           const translator = new AnthropicProvider(key, endpoint.baseUrl);
-          const response = await translator.complete(reinforcedBody);
+          const response = await translator.complete(upstreamBody);
           const marker = formatMarker(baseMarker, endpoint.provider, response.model);
           const upstreamHeader = `${endpoint.provider}/${response.model ?? requestedModel}`;
           return sendChatCompletion(
@@ -480,7 +559,7 @@ export function registerChatCompletionsRoute(
         const auth = pickAuthHeader(incoming, fallbackKey);
         if (auth) headers['authorization'] = auth;
 
-        const body: Record<string, unknown> = { ...reinforcedBody, stream: false };
+        const body: Record<string, unknown> = { ...upstreamBody, stream: false };
         // CLIProxyAPI relays to Claude via the Claude Code OAuth session.
         // Claude doesn't natively support OpenAI's json_schema response_format,
         // and forcing it conflicts with Claude Code's own session prompt — the

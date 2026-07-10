@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
-import type { ProviderName, TrueGateConfig, TrueGateMode } from '../types/runtime.js';
+import type { PolicyMode, ProviderName, TrueGateConfig, TrueGateMode } from '../types/runtime.js';
 import { DEFAULT_LOG_LEVEL, DEFAULT_PORT } from './constants.js';
 import { stateDir } from './paths.js';
 
@@ -15,6 +15,8 @@ const PROVIDER_NAMES: [ProviderName, ...ProviderName[]] = [
   'custom',
 ];
 
+const POLICY_MODES: [PolicyMode, ...PolicyMode[]] = ['off', 'targeted', 'light', 'full'];
+
 export const UserConfigSchema = z
   .object({
     provider: z.enum(PROVIDER_NAMES).optional(),
@@ -26,6 +28,9 @@ export const UserConfigSchema = z
     upstreamUrl: z.string().optional(),
     upstreamApiKey: z.string().optional(),
     stripClientSystem: z.boolean().optional(),
+    policyMode: z.enum(POLICY_MODES).optional(),
+    /** Deprecated compatibility shim for early MVP builds. */
+    injectGovernance: z.boolean().optional(),
     responseMarker: z.string().optional(),
     mode: z.enum(['auto', 'locked']).optional(),
     modelOverrides: z.record(z.enum(PROVIDER_NAMES)).optional(),
@@ -73,6 +78,7 @@ export interface ConfigOverrides {
   upstreamUrl?: string;
   upstreamApiKey?: string;
   stripClientSystem?: boolean;
+  policyMode?: PolicyMode;
   responseMarker?: string;
   mode?: TrueGateMode;
   providerForced?: boolean;
@@ -123,6 +129,21 @@ export function resolveConfig(
     (stripEnv ? stripEnv === '1' || stripEnv.toLowerCase() === 'true' : undefined) ??
     userConfig.stripClientSystem;
 
+  const injectEnv = env['TRUEGATE_INJECT_GOVERNANCE'];
+  const legacyInjectGovernance =
+    injectEnv !== undefined
+      ? injectEnv === '1' || injectEnv.toLowerCase() === 'true'
+      : userConfig.injectGovernance;
+  const policyMode =
+    overrides.policyMode ??
+    (env['TRUEGATE_POLICY_MODE'] as PolicyMode | undefined) ??
+    userConfig.policyMode ??
+    (legacyInjectGovernance === undefined
+      ? undefined
+      : legacyInjectGovernance
+        ? 'full'
+        : 'off');
+
   const responseMarker =
     overrides.responseMarker ?? env['TRUEGATE_RESPONSE_MARKER'] ?? userConfig.responseMarker;
 
@@ -146,6 +167,7 @@ export function resolveConfig(
   if (upstreamUrl !== undefined) config.upstreamUrl = upstreamUrl;
   if (upstreamApiKey !== undefined) config.upstreamApiKey = upstreamApiKey;
   if (stripClientSystem !== undefined) config.stripClientSystem = stripClientSystem;
+  if (policyMode !== undefined) config.policyMode = policyMode;
   if (responseMarker !== undefined) config.responseMarker = responseMarker;
 
   return config;

@@ -105,6 +105,8 @@ ok
 
 That marker proves the request passed through trueGate and identifies the upstream.
 
+For Agent0 turns that use the `agent_zero_envelope` JSON response format, trueGate keeps routing metadata in the `x-truegate-upstream` header instead of appending `— trueGate` / `Governance:` text inside `tool_args.text`. This avoids polluting Agent0 conversation history with gateway-authored footers that Claude may later mistake for its own prior output.
+
 ## MCP Notes
 
 Keep Agent0 MCPs limited to commands that exist inside the container. A global MCP entry like:

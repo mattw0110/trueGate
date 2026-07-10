@@ -102,6 +102,18 @@ Mitigations:
 - Reset the chat or trim old context to reduce prompt size.
 - This is rare (one event per thousands of turns in practice).
 
+## Agent0 appears stuck after saying it will check again
+
+If Agent0 can reach trueGate but Claude keeps ending turns with text like "I need to check..." or "I'll poll again", inspect trueGate logs for `PLAN-OF-RECORD`. That means the model returned a terminal `response` envelope instead of the next tool call. trueGate reinforces the loop contract, but the practical recovery is to re-prompt with "execute the next check now" or reset the Agent0 chat if the context is very large.
+
+Also check for stale shell sessions inside the container:
+
+```bash
+docker exec agent0 ps -ef
+```
+
+Many idle `/bin/bash` or `tail -f` processes usually indicate accumulated Agent0 tool sessions, not a trueGate connectivity problem.
+
 ## Agent0 cannot reach trueGate
 
 Inside Docker, `localhost` is the Agent0 container. Configure Agent0 with:

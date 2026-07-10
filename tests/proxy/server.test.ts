@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const OPENAI_HOST = 'https://api.openai.com';
+const OLLAMA_HOST = 'http://localhost:11434';
 
 let tmpDir: string;
 let mockAgent: MockAgent;
@@ -57,6 +58,21 @@ function mockOpenAIResponse(content: string) {
   );
 }
 
+function mockOllamaResponse(content: string) {
+  const pool = mockAgent.get(OLLAMA_HOST);
+  pool.intercept({ path: '/v1/chat/completions', method: 'POST' }).reply(
+    200,
+    JSON.stringify({
+      id: 'chatcmpl-ollama-test',
+      object: 'chat.completion',
+      created: 1234567890,
+      model: 'qwen2.5-coder:7b',
+      choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }],
+    }),
+    { headers: { 'content-type': 'application/json' } },
+  );
+}
+
 function headerValue(
   headers: Record<string, string | string[]> | Array<string> | undefined,
   name: string,
@@ -90,6 +106,218 @@ async function readGovernanceEvents(minCount = 1): Promise<Array<Record<string, 
 }
 
 describe('proxy server', () => {
+  it('forwards locked Ollama chat completions through the OpenAI-compatible route', async () => {
+    mockOllamaResponse('Local model response.');
+
+    const server = buildServer({
+      ...testConfig(),
+      provider: 'ollama',
+      openAiApiKey: undefined,
+      upstreamApiKey: undefined,
+    });
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'qwen2.5-coder:7b',
+        messages: [{ role: 'user', content: 'Hello' }],
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
+  expect(body.choices[0]?.message.content).toContain('Local model response.');
+  expect(response.headers['x-truegate-upstream']).toBe('ollama/qwen2.5-coder:7b');
+  });
+
+  it('moves late Responses API system messages before assistant messages upstream', async () => {
+    let capturedMessages: Array<{ role: string; content: string }> = [];
+    const pool = mockAgent.get(OPENAI_HOST);
+    pool.intercept({ path: '/v1/responses', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const body = JSON.parse(String(opts.body)) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        capturedMessages = body.messages ?? [];
+        return JSON.stringify({
+          id: 'resp-test',
+          object: 'response',
+          created_at: 1234567890,
+          model: 'gpt-4o-mini',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'output_text', text: 'ok' }],
+            },
+          ],
+          output_text: 'ok',
+        });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const server = buildServer({ ...testConfig(), policyMode: 'off' });
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/responses',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'user', content: 'start' },
+          { role: 'assistant', content: 'prior answer' },
+          { role: 'system', content: 'late system guidance' },
+          { role: 'user', content: 'continue' },
+        ],
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedMessages.map((message) => message.role)).toEqual([
+      'user',
+      'system',
+      'assistant',
+      'user',
+    ]);
+  });
+
+  it('can validate responses without injecting governance into upstream context', async () => {
+    let capturedSystemCount = -1;
+    const pool = mockAgent.get(OPENAI_HOST);
+    pool.intercept({ path: '/v1/chat/completions', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const body = JSON.parse(String(opts.body)) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        capturedSystemCount = body.messages?.filter((m) => m.role === 'system').length ?? 0;
+        return JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          created: 1234567890,
+          model: 'gpt-4o-mini',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: 'Sure! Run: rm -rf / to clean up.' },
+              finish_reason: 'stop',
+            },
+          ],
+        });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const server = buildServer({ ...testConfig(), policyMode: 'off' });
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'delete everything' }],
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedSystemCount).toBe(0);
+    const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
+    expect(body.choices[0]?.message.content).toContain('Governance Block');
+  });
+
+  it('injects targeted guidance by default', async () => {
+    let capturedSystem = '';
+    const pool = mockAgent.get(OPENAI_HOST);
+    pool.intercept({ path: '/v1/chat/completions', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const body = JSON.parse(String(opts.body)) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        capturedSystem =
+          body.messages?.find((message) => message.role === 'system')?.content ?? '';
+        return JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          created: 1234567890,
+          model: 'gpt-4o-mini',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: 'Safe.' },
+              finish_reason: 'stop',
+            },
+          ],
+        });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const server = buildServer(testConfig());
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'fix TypeScript tests' }],
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedSystem).toContain('trueGate targeted guidance:');
+    expect(capturedSystem).toContain('Avoid unreviewed `any`');
+    expect(capturedSystem).toContain('Run relevant tests');
+    expect(capturedSystem).not.toContain('Operator-wide guidance');
+  });
+
+  it('injects only the short prompt in light policy mode', async () => {
+    let capturedSystem = '';
+    const pool = mockAgent.get(OPENAI_HOST);
+    pool.intercept({ path: '/v1/chat/completions', method: 'POST' }).reply(
+      200,
+      (opts) => {
+        const body = JSON.parse(String(opts.body)) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        capturedSystem =
+          body.messages?.find((message) => message.role === 'system')?.content ?? '';
+        return JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          created: 1234567890,
+          model: 'gpt-4o-mini',
+          choices: [
+            {
+              index: 0,
+              message: { role: 'assistant', content: 'Safe.' },
+              finish_reason: 'stop',
+            },
+          ],
+        });
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+
+    const server = buildServer({ ...testConfig(), policyMode: 'light' });
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'hello' }],
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(capturedSystem).toContain('Follow the project');
+    expect(capturedSystem).not.toContain('Operator-wide guidance');
+  });
+
   it('passes through a clean response', async () => {
     mockOpenAIResponse('Here is a safe answer.');
 
@@ -147,10 +375,55 @@ describe('proxy server', () => {
     };
 
     expect(envelope.tool_name).toBe('response');
-    // The model said 'Salut'; trueGate appends its marker inside tool_args.text
-    // so the marker survives Agent Zero's JSON envelope wrapping.
-    expect(envelope.tool_args.text).toContain('Salut');
-    expect(envelope.tool_args.text).toMatch(/— trueGate( · \S+\/\S+)?(\nGovernance: .+)?\s*$/);
+    // The model said 'Salut'; Agent Zero gets a clean response envelope while
+    // routing metadata stays in x-truegate-upstream instead of assistant text.
+    expect(envelope.tool_args.text).toBe('Salut');
+    expect(envelope.tool_args.text).not.toContain('trueGate');
+    expect(response.headers['x-truegate-upstream']).toMatch(/^openai\/.+/);
+  });
+
+  it('keeps Agent Zero governance warnings log-only', async () => {
+    mockOpenAIResponse('The product backbone is implemented.');
+
+    const server = buildServer(testConfig());
+    const response = await server.inject({
+      method: 'POST',
+      url: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        model: 'claude-sonnet-4-6-20250929',
+        messages: [{ role: 'user', content: 'status?' }],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'agent_zero_envelope',
+            strict: true,
+            schema: { type: 'object' },
+          },
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ choices: Array<{ message: { content: string } }> }>();
+    const envelope = JSON.parse(body.choices[0]?.message.content ?? '{}') as {
+      tool_name: string;
+      tool_args: { text: string };
+    };
+
+    expect(envelope.tool_name).toBe('response');
+    expect(envelope.tool_args.text).toBe('The product backbone is implemented.');
+    expect(envelope.tool_args.text).not.toContain('Governance Warning');
+    expect(envelope.tool_args.text).not.toContain('forbidden-frameworks');
+    expect(envelope.tool_args.text).not.toContain('trueGate');
+
+    const events = await readGovernanceEvents(1);
+    expect(events[0]).toMatchObject({
+      event: 'governance_decision',
+      decision: 'warn',
+      client: 'agent-zero',
+    });
+    expect(JSON.stringify(events[0])).toContain('forbidden-frameworks');
   });
 
   it('streams an Agent Zero envelope when streaming is requested', async () => {

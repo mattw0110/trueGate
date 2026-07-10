@@ -60,6 +60,11 @@ program
     '--strip-client-system',
     "Drop the client's system prompt and use ONLY trueGate's governance. Useful with CLIProxyAPI to bypass Claude Code's baked-in agent prompt.",
   )
+  .option(
+    '--no-governance-injection',
+    'Deprecated alias for --policy-mode off',
+  )
+  .option('--policy-mode <mode>', 'off | targeted | light | full (default: targeted)')
   .option('--response-marker <text>', "Suffix appended to every response (default: '— trueGate')")
   .option('--no-response-marker', 'Disable the response marker suffix')
   .option('--no-auto', 'Skip startup probes; use only the configured provider (locked mode)')

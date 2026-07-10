@@ -744,6 +744,263 @@ export function parseToolCallJsonXml(content: string): CanonicalCall | null {
   return null;
 }
 
+function parseClaudeCodeCallRecord(value: unknown): { toolName: string; args: Record<string, unknown> } | null {
+  const firstCall = Array.isArray(value) ? value[0] : value;
+  if (!isRecord(firstCall)) return null;
+
+  const toolName =
+    typeof firstCall.name === 'string'
+      ? firstCall.name
+      : typeof firstCall.tool_name === 'string'
+        ? firstCall.tool_name
+        : null;
+  if (!toolName) return null;
+
+  const lower = toolName.toLowerCase();
+  if (!ADAPTERS[lower] && !NATIVE_AGENT_ZERO_TOOLS.has(lower)) return null;
+
+  let toolArgs = firstCall.input ?? firstCall.tool_args ?? firstCall.arguments;
+  if (typeof toolArgs === 'string') {
+    try {
+      toolArgs = JSON.parse(toolArgs) as unknown;
+    } catch {
+      // Fall back to the remaining top-level keys below.
+    }
+  }
+
+  const fallbackArgs = Object.fromEntries(
+    Object.entries(firstCall).filter(
+      ([key]) => !['id', 'name', 'tool_name', 'input', 'tool_args', 'arguments'].includes(key),
+    ),
+  );
+  return { toolName, args: isRecord(toolArgs) ? toolArgs : fallbackArgs };
+}
+
+export function parseClaudeCodeJsonCall(content: string): CanonicalCall | null {
+  const callsMatch = /(?:^|\n)[ \t]*_calls[ \t]*(?:\r?\n|$)/i.exec(content);
+  if (callsMatch) {
+    const afterMarker = content.slice(callsMatch.index + callsMatch[0].length).trimStart();
+    const starts = [afterMarker.indexOf('{'), afterMarker.indexOf('[')].filter(
+      (index) => index >= 0,
+    );
+    if (starts.length > 0) {
+      const start = Math.min(...starts);
+      const end = findJsonValueEnd(afterMarker.slice(start));
+      if (end >= 0) {
+        const rawJson = afterMarker.slice(start, start + end + 1);
+        const candidates = [rawJson, escapeControlCharsInsideJsonStrings(rawJson)];
+        for (const candidate of candidates) {
+          try {
+            const call = parseClaudeCodeCallRecord(JSON.parse(candidate) as unknown);
+            if (!call) continue;
+            const preface = content.slice(0, callsMatch.index).trim();
+            const canon = canonicalize(call.toolName, call.args);
+            return { ...canon, preface };
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  }
+
+  const fencedMatch =
+    /(?:^|\n)[ \t]*([A-Za-z][\w.-]*)[ \t]*\r?\n[ \t]*```(?:json)?[ \t]*\r?\n([\s\S]*?)```/i.exec(
+      content,
+    );
+  if (!fencedMatch || typeof fencedMatch[1] !== 'string' || typeof fencedMatch[2] !== 'string') {
+    return null;
+  }
+
+  const toolName = fencedMatch[1];
+  const lower = toolName.toLowerCase();
+  if (!ADAPTERS[lower] && !NATIVE_AGENT_ZERO_TOOLS.has(lower)) return null;
+
+  const rawJson = fencedMatch[2].trim();
+  const candidates = [rawJson, escapeControlCharsInsideJsonStrings(rawJson)];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!isRecord(parsed)) continue;
+      const preface = content.slice(0, fencedMatch.index).trim();
+      const canon = canonicalize(toolName, parsed);
+      return { ...canon, preface };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+export function parseMarkdownToolLine(content: string): CanonicalCall | null {
+  const match =
+    /(?:^|\n)[ \t]*\*\*[ \t]*(Read|View|Bash|Shell|code_execution_tool|text_editor)(?:[ \t]*\(([A-Za-z_][\w.-]*)\))?[ \t]*\*\*[ \t]+`([^`]+)`/i.exec(
+      content,
+    );
+  if (!match || typeof match[1] !== 'string' || typeof match[3] !== 'string') return null;
+
+  const toolName = match[1];
+  const action = typeof match[2] === 'string' ? match[2].toLowerCase() : undefined;
+  const value = match[3].trim();
+  if (!value) return null;
+
+  const lower = toolName.toLowerCase();
+  const args =
+    lower === 'bash' || lower === 'shell' || lower === 'code_execution_tool'
+      ? { runtime: 'terminal', code: value }
+      : action
+        ? { action, path: value }
+        : { file_path: value };
+  const preface = content.slice(0, match.index).trim();
+  const canon = canonicalize(toolName, args);
+  return { ...canon, preface };
+}
+
+export function parseMarkdownToolFence(content: string): CanonicalCall | null {
+  const match =
+    /(?:^|\n)[ \t]*\*\*[ \t]*(Bash|Shell|code_execution_tool)(?:[ \t]*\(([A-Za-z_][\w.-]*)\))?[ \t]*\*\*[ \t]*\r?\n[ \t]*```[^\r\n]*\r?\n([\s\S]*?)```/i.exec(
+      content,
+    );
+  if (!match || typeof match[1] !== 'string' || typeof match[3] !== 'string') return null;
+
+  const code = match[3].trim();
+  if (!code) return null;
+
+  const toolName = match[1];
+  const runtime = typeof match[2] === 'string' && match[2].trim() ? match[2].toLowerCase() : 'terminal';
+  const preface = content.slice(0, match.index).trim();
+  const canon = canonicalize(toolName, { runtime, code });
+  return { ...canon, preface };
+}
+
+export function parseAdapterCommandLine(content: string): CanonicalCall | null {
+  const lines = content.split(/\r?\n/);
+  let toolIdx = -1;
+  let toolName = '';
+  let nonBlankSeen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] ?? '').trim();
+    if (!line) continue;
+    nonBlankSeen++;
+    if (nonBlankSeen > TOOL_NAME_MAX_LINE_INDEX) break;
+    const lower = line.toLowerCase();
+    if (ADAPTERS[lower]) {
+      toolIdx = i;
+      toolName = line;
+      break;
+    }
+  }
+  if (toolIdx === -1) return null;
+
+  const positional = lines
+    .slice(toolIdx + 1)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (positional.length === 0) return null;
+
+  const preface = lines.slice(0, toolIdx).join('\n').trim();
+  const lower = toolName.toLowerCase();
+  let args: Record<string, unknown>;
+  if (lower === 'bash' || lower === 'shell' || lower === 'run' || lower === 'execute') {
+    args = { command: positional.join('\n') };
+  } else {
+    args = { file_path: positional[0] };
+    if (/^-?\d+$/.test(positional[1] ?? '')) args.line_from = parseInt(positional[1]!, 10);
+    if (/^-?\d+$/.test(positional[2] ?? '')) args.line_to = parseInt(positional[2]!, 10);
+  }
+  const canon = canonicalize(toolName, args);
+  return { ...canon, preface };
+}
+
+function parseFunctionStyleArgs(rawArgs: string): Record<string, unknown> {
+  const args: Record<string, unknown> = {};
+  const pairRe =
+    /([A-Za-z_][\w.-]*)\s*=\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,)]+)(?:\s*,|\s*$)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pairRe.exec(rawArgs)) !== null) {
+    const key = match[1];
+    const rawValue = match[2];
+    if (typeof key !== 'string' || typeof rawValue !== 'string') continue;
+    const trimmed = rawValue.trim();
+    if (trimmed.startsWith('"')) {
+      try {
+        args[key] = JSON.parse(trimmed);
+        continue;
+      } catch {
+        args[key] = trimmed.slice(1, -1);
+        continue;
+      }
+    }
+    if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+      args[key] = trimmed.slice(1, -1).replace(/\\'/g, "'");
+      continue;
+    }
+    args[key] = coerceParam(trimmed);
+  }
+  return args;
+}
+
+export function parseFunctionStyleToolCall(content: string): CanonicalCall | null {
+  const match =
+    /(?:^|\n)[ \t]*(_?[A-Za-z][\w.-]*)[ \t]*\(([\s\S]*?)\)[ \t]*(?:\n|$)/.exec(content);
+  if (!match || typeof match[1] !== 'string' || typeof match[2] !== 'string') return null;
+
+  let toolName = match[1];
+  if (toolName === '_execution_tool') toolName = 'code_execution_tool';
+  const lower = toolName.toLowerCase();
+  if (!ADAPTERS[lower] && !NATIVE_AGENT_ZERO_TOOLS.has(lower)) return null;
+
+  const args = parseFunctionStyleArgs(match[2]);
+  if (Object.keys(args).length === 0) return null;
+
+  const preface = content.slice(0, match.index).trim();
+  const canon = canonicalize(toolName, args);
+  return { ...canon, preface };
+}
+
+export function parseBareCodeExecutionArgsJson(content: string): CanonicalCall | null {
+  const trimmed = stripFences(content).trim();
+  const start = trimmed.indexOf('{');
+  if (start < 0) return null;
+
+  const end = findJsonValueEnd(trimmed.slice(start));
+  if (end < 0) return null;
+
+  const rawJson = trimmed.slice(start, start + end + 1);
+  const candidates = [rawJson, escapeControlCharsInsideJsonStrings(rawJson)];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (!isRecord(parsed) || typeof parsed.code !== 'string') continue;
+      const runtime =
+        typeof parsed.runtime === 'string' && parsed.runtime.trim() ? parsed.runtime : 'terminal';
+      const preface = trimmed.slice(0, start).trim();
+      const canon = canonicalize('code_execution_tool', { runtime, code: parsed.code });
+      return { ...canon, preface };
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+export function parseProseTerminalBlock(content: string): CanonicalCall | null {
+  const match =
+    /(?:^|\n)\s*\n\s*((?:cd|python3?|npm|pnpm|yarn|git|grep|sed|awk|cat|wc|ruff|pytest|\.venv\/|docker|systemctl)\b[\s\S]*)$/i.exec(
+      content,
+    );
+  if (!match || typeof match[1] !== 'string') return null;
+
+  const code = match[1].trim();
+  if (!code || code.split(/\r?\n/).length < 2) return null;
+
+  const preface = content.slice(0, match.index).trim();
+  const canon = canonicalize('code_execution_tool', { runtime: 'terminal', code });
+  return { ...canon, preface };
+}
+
 export function parseBareJsonToolCall(content: string): CanonicalCall | null {
   const trimmed = stripFences(content).trim();
   const starts = [trimmed.indexOf('{'), trimmed.indexOf('[')].filter((index) => index >= 0);
@@ -916,6 +1173,8 @@ export function parseAgentZeroEnvelope(content: string): CanonicalCall | null {
   if (balanced) candidates.add(balanced);
   const repaired = extractJsonObjectWithMissingTrailingClosers(unfenced);
   if (repaired) candidates.add(repaired);
+  const repairedThoughts = repairThoughtsHeadlineSplit(unfenced);
+  if (repairedThoughts) candidates.add(repairedThoughts);
   for (const candidate of Array.from(candidates)) {
     const escapedControlChars = escapeControlCharsInsideJsonStrings(candidate);
     if (escapedControlChars !== candidate) candidates.add(escapedControlChars);
@@ -926,6 +1185,27 @@ export function parseAgentZeroEnvelope(content: string): CanonicalCall | null {
     if (result) return result;
   }
   return null;
+}
+
+function repairThoughtsHeadlineSplit(input: string): string | null {
+  if (
+    !input.includes('"thoughts"') ||
+    !input.includes('"headline"') ||
+    !input.includes('"tool_name"') ||
+    !input.includes('"tool_args"')
+  ) {
+    return null;
+  }
+
+  const start = input.indexOf('{');
+  if (start === -1) return null;
+  const candidate = input
+    .slice(start)
+    .replace(/("thoughts"\s*:\s*\[[\s\S]*?"\s*),\s*"headline"\s*:/, '$1],"headline":');
+
+  const balanced = extractBalancedJsonObject(candidate);
+  if (balanced) return balanced;
+  return extractJsonObjectWithMissingTrailingClosers(candidate);
 }
 
 function extractJsonObjectWithMissingTrailingClosers(input: string): string | null {
@@ -1031,7 +1311,18 @@ function tryParseEnvelopeSlice(slice: string): CanonicalCall | null {
     // message). Upgrade to the real tool call so agent-zero acts on it.
     if (canon.name === 'response') {
       const innerText = typeof canon.args.text === 'string' ? canon.args.text : '';
-      const inner = parseProseToolCall(innerText);
+      const inner =
+        (innerText.trim() !== slice.trim()
+          ? (parseAgentZeroEnvelope(innerText) ?? parseBareJsonToolCall(innerText))
+          : null) ??
+        parseClaudeCodeJsonCall(innerText) ??
+        parseMarkdownToolFence(innerText) ??
+        parseMarkdownToolLine(innerText) ??
+        parseAdapterCommandLine(innerText) ??
+        parseFunctionStyleToolCall(innerText) ??
+        parseBareCodeExecutionArgsJson(innerText) ??
+        parseProseTerminalBlock(innerText) ??
+        parseProseToolCall(innerText);
       if (inner) {
         return {
           ...inner,
@@ -1244,12 +1535,19 @@ export function parseUpstreamCall(message: ChatMessage | undefined): CanonicalCa
         parseAnswerOperatorPluginXml(message.content) ??
         parseXmlFunctionCall(message.content) ??
         parseToolCallJsonXml(message.content) ??
+        parseClaudeCodeJsonCall(message.content) ??
+        parseMarkdownToolFence(message.content) ??
+        parseMarkdownToolLine(message.content) ??
+        parseAdapterCommandLine(message.content) ??
+        parseFunctionStyleToolCall(message.content) ??
+        parseBareCodeExecutionArgsJson(message.content) ??
         parseBareJsonToolCall(message.content) ??
         parseFencedYamlToolCall(message.content) ??
         parseExecuteCommandXml(message.content) ??
         parseToolAsTagXml(message.content) ??
         parseReadFilesXml(message.content) ??
         parseProseToolCall(message.content) ??
+        parseProseTerminalBlock(message.content) ??
         parseDominantBashFence(message.content))
       : null)
   );
@@ -1402,27 +1700,28 @@ export function translateResponseToConvention(
         `agent-zero: RAW STRUCTURED OUTPUT detected. The upstream returned a bare JSON array/object ` +
           `instead of the Agent Zero envelope; wrapping it as response text so the client can parse it.`,
       );
-    } else {
-      // Full raw content dump so we can see WHY every parser missed.
-      // Truncated to 4 KB to keep journald sane.
-      const dump = content.length > 4096 ? content.slice(0, 4096) + '…[truncated]' : content;
-      log?.(
-        'warn',
-        `agent-zero envelope normalization fired: no parser matched. ` +
-          `content.length=${content.length}, type=${typeof message.content}. ` +
-          `RAW CONTENT BELOW (JSON-encoded so newlines/whitespace are visible):\n${JSON.stringify(dump)}`,
-      );
     }
     return replaceFirstMessage(response, {
       role: 'assistant',
       content: emitAgentZeroEnvelope({
         name: 'response',
         args: { text: content },
-        preface:
-          'The upstream model returned assistant text instead of Agent Zero JSON, so trueGate normalized it into the response tool envelope.',
+        preface: '',
         originalName: 'response',
       }),
     });
+  }
+
+  if (convention === 'agent-zero' && canonical.name === 'response') {
+    const responseText = typeof canonical.args.text === 'string' ? canonical.args.text : '';
+    if (looksLikePlanOfRecord(responseText)) {
+      log?.(
+        'warn',
+        `agent-zero: PLAN-OF-RECORD RESPONSE envelope detected. The upstream emitted a valid ` +
+          `terminal response envelope, but tool_args.text only describes intended next steps. ` +
+          `Agent Zero will stop here unless the user re-prompts or the model emits a real tool call.`,
+      );
+    }
   }
 
   log?.(

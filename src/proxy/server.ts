@@ -31,15 +31,39 @@ export function buildServer(config: TrueGateConfig, registry?: UpstreamRegistry)
   // routing has something to work with.
   const resolved = registry ?? buildLockedRegistrySync(config);
 
+  fastify.decorate('truegateConfig', config);
   fastify.addHook('onRequest', makeGovernanceLoaderHook());
   fastify.addHook('preHandler', requestCompilerHook);
 
   registerBlockOverrideRoutes(fastify);
+  registerModelsRoute(fastify, resolved);
   registerChatCompletionsRoute(fastify, config, resolved);
   registerMessagesRoute(fastify, config, resolved);
   registerResponsesRoute(fastify, config, resolved);
 
   return fastify;
+}
+
+function registerModelsRoute(fastify: FastifyInstance, registry: UpstreamRegistry): void {
+  fastify.get('/v1/models', async () => {
+    const ids = new Set<string>();
+    for (const endpoint of registry.endpoints) {
+      if (!endpoint.reachable) continue;
+      for (const model of endpoint.models) {
+        if (model) ids.add(model);
+      }
+    }
+
+    return {
+      object: 'list',
+      data: [...ids].sort((a, b) => a.localeCompare(b)).map((id) => ({
+        id,
+        object: 'model',
+        created: 0,
+        owned_by: 'truegate',
+      })),
+    };
+  });
 }
 
 function buildLockedRegistrySync(config: TrueGateConfig): UpstreamRegistry {

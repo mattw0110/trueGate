@@ -1,13 +1,17 @@
 import type { CompiledContext } from '../../types/governance.js';
 import type { AnthropicNativeRequest, AnthropicTextBlock } from '../../types/anthropic.js';
+import type { PolicyMode } from '../../types/runtime.js';
+import { governancePromptForMode } from './policy-mode.js';
 
 export interface AnthropicInjectOptions {
   /**
    * Drop the client's `system` field entirely and inject only governance.
    * Use this for testing governance in isolation; it WILL break agent CLIs
    * (Claude Code, etc.) that rely on their baked-in system prompt.
-   */
+  */
   stripClientSystem?: boolean;
+  policyMode?: PolicyMode;
+  sourceText?: string;
 }
 
 export function injectGovernanceIntoAnthropic(
@@ -15,7 +19,7 @@ export function injectGovernanceIntoAnthropic(
   context: CompiledContext,
   options: AnthropicInjectOptions = {},
 ): AnthropicNativeRequest {
-  const governance = context.systemMessage.trim();
+  const governance = governancePromptForMode(context, options.policyMode, options.sourceText);
 
   if (options.stripClientSystem) {
     // Replace the client's system entirely. If we have no governance to add,

@@ -2,10 +2,30 @@
 
 trueGate enforces governance at two layers:
 
-1. **`governance.md`** — free-form prose, injected as a system message into every request.
+1. **Prompt policy** — optional prose hints injected only when `policyMode` is `light` or `full`.
 2. **`rules.yaml`** — machine-readable patterns. trueGate validates every response and can `warn` or `block`.
 
-Together: **prompt-time guidance + output-time enforcement**.
+By default, trueGate runs as a gateway + verifier with a small targeted prompt
+hint. It routes requests, validates responses, and logs decisions. Prompt
+steering can be turned off or expanded.
+
+Policy modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | No trueGate prose is added to upstream prompts; response validation still runs. |
+| `targeted` | Default. Adds a capped request-specific snippet for code quality, verification, security, TypeScript, Python, or PR work. |
+| `light` | Adds a generic short safety reminder. Useful when you want minimal steering without classification. |
+| `full` | Injects the full compiled `governance.md` bundle. Useful for intentional policy testing. |
+
+Configure with:
+
+```bash
+truegate serve --policy-mode off
+truegate serve --policy-mode targeted
+truegate serve --policy-mode light
+truegate serve --policy-mode full
+```
 
 ---
 
@@ -13,7 +33,7 @@ Together: **prompt-time guidance + output-time enforcement**.
 
 trueGate's governance is organized in two tiers, with operator state on top:
 
-1. **Master files** (always loaded into every request, ≤200 lines each):
+1. **Master files** (loaded for validation and optional prompt policy, ≤200 lines each):
 
 - `data/governance.md` — prose rules + a topic index pointing at `docs/`.
 - `data/rules.yaml` — pattern enforcement on every response.
@@ -26,7 +46,7 @@ trueGate's governance is organized in two tiers, with operator state on top:
    replaces the shipped masters when present (never merged).
 
 Every file in this system honors a **200-line ceiling**, with no exceptions.
-That cap keeps the always-injected context small and forces topics to
+That cap keeps the optional full prompt reasonably small and forces topics to
 stay focused.
 
 ---
@@ -67,7 +87,10 @@ truegate inspect
 
 ## `governance.md`
 
-Free-form Markdown. trueGate injects it verbatim as a system message. The LLM sees it on every request and biases generation accordingly.
+Free-form Markdown. trueGate injects it verbatim as a system message only when
+`policyMode` is `full`. In the default `targeted` mode, the LLM sees only a
+small built-in snippet selected from request text; response validation still
+uses `rules.yaml`.
 
 ```markdown
 # Operator Governance

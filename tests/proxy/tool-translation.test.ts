@@ -4,6 +4,13 @@ import {
   canonicalize,
   parseXmlFunctionCall,
   parseToolCallJsonXml,
+  parseClaudeCodeJsonCall,
+  parseMarkdownToolLine,
+  parseMarkdownToolFence,
+  parseAdapterCommandLine,
+  parseFunctionStyleToolCall,
+  parseBareCodeExecutionArgsJson,
+  parseProseTerminalBlock,
   parseAgentZeroEnvelope,
   parseOpenAIToolCall,
   parseAnthropicToolUse,
@@ -504,16 +511,21 @@ describe('translateResponseToConvention — openai-tools and anthropic-tools', (
   });
 
   it('agent-zero client + no tool call detected → wraps prose as response envelope', () => {
+    const logs: Array<{ level: 'warn' | 'info'; msg: string }> = [];
     const r = translateResponseToConvention(
       res({ role: 'assistant', content: 'Just chatting.' }),
       'agent-zero',
+      (level, msg) => logs.push({ level, msg }),
     );
     const env = JSON.parse(r.choices[0]!.message.content as string) as {
+      thoughts: string[];
       tool_name: string;
       tool_args: { text: string };
     };
     expect(env.tool_name).toBe('response');
     expect(env.tool_args.text).toBe('Just chatting.');
+    expect(env.thoughts.join(' ')).not.toContain('upstream model returned assistant text');
+    expect(logs).toEqual([]);
   });
 
   it('agent-zero client + fenced JSON envelope → re-emits without fences', () => {
@@ -528,8 +540,32 @@ describe('translateResponseToConvention — openai-tools and anthropic-tools', (
     const txt = r.choices[0]!.message.content as string;
     expect(txt.startsWith('{')).toBe(true);
     expect(txt).not.toContain('```');
-    const env = JSON.parse(txt) as { tool_name: string };
+  });
+
+  it('agent-zero client logs valid response envelopes that only describe next steps', () => {
+    const warnings: string[] = [];
+    const r = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: ['I should inspect the process state.'],
+          headline: 'Checking process status',
+          tool_name: 'response',
+          tool_args: { text: 'I need to check whether the background job is still running.' },
+        }),
+      }),
+      'agent-zero',
+      (level, msg) => {
+        if (level === 'warn') warnings.push(msg);
+      },
+    );
+    const env = JSON.parse(r.choices[0]!.message.content as string) as {
+      tool_name: string;
+      tool_args: { text: string };
+    };
     expect(env.tool_name).toBe('response');
+    expect(env.tool_args.text).toContain('background job');
+    expect(warnings.some((msg) => msg.includes('PLAN-OF-RECORD RESPONSE'))).toBe(true);
   });
 });
 
@@ -999,6 +1035,329 @@ describe('parseToolCallJsonXml', () => {
     const parsed = JSON.parse(body as string);
     expect(parsed.tool_name).toBe('code_execution_tool');
     expect(parsed.tool_args.code).toBe('git status');
+  });
+});
+
+describe('parseClaudeCodeJsonCall', () => {
+  it('extracts Claude Code _calls JSON with Read input', () => {
+    const c = parseClaudeCodeJsonCall(
+      'I will inspect the launch command.\n\n_calls\n{"id":"toolu_1","name":"Read","input":{"file_path":"/a0/usr/projects/truemarketing/audit-results/latest/launch.txt"}}',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe('/a0/usr/projects/truemarketing/audit-results/latest/launch.txt');
+    expect(c?.preface).toBe('I will inspect the launch command.');
+  });
+
+  it('extracts Claude Code tool-name plus fenced JSON args', () => {
+    const c = parseClaudeCodeJsonCall(
+      'Read\n```json\n{"file_path":"/a0/usr/projects/truemarketing/audit-results/latest/launch.txt"}\n```',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe('/a0/usr/projects/truemarketing/audit-results/latest/launch.txt');
+  });
+
+  it('lets agent-zero translation recover _calls instead of wrapping as response', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content:
+          'Let me check the most recent run.\n\n_calls\n{"id":"toolu_1","name":"Read","input":{"file_path":"/a0/usr/projects/truemarketing/audit-results/latest/launch.txt"}}',
+      }),
+      'agent-zero',
+    );
+    const body = out.choices[0]?.message.content;
+    expect(typeof body).toBe('string');
+    const parsed = JSON.parse(body as string);
+    expect(parsed.tool_name).toBe('text_editor');
+    expect(parsed.tool_args.action).toBe('read');
+    expect(parsed.tool_args.path).toBe(
+      '/a0/usr/projects/truemarketing/audit-results/latest/launch.txt',
+    );
+  });
+});
+
+describe('parseMarkdownToolLine', () => {
+  it('extracts Claude markdown Read lines with backtick paths', () => {
+    const c = parseMarkdownToolLine(
+      '**Read** `.run/verify-sprint76.log`\n\n**Read** `scripts/verification_status.snapshot.json`',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe('.run/verify-sprint76.log');
+  });
+
+  it('extracts Claude markdown text_editor action lines with backtick paths', () => {
+    const c = parseMarkdownToolLine(
+      'Reads need absolute paths.\n\n**text_editor (read)** `/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json`\n\n**text_editor (read)** `/a0/usr/projects/localtradeos/README.md` (tail - recent sprint sections)',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe(
+      '/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json',
+    );
+    expect(c?.preface).toContain('Reads need absolute paths.');
+  });
+
+  it('lets agent-zero translation recover markdown Read instead of wrapping as response', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: '**Read** `.run/verify-sprint76.log`',
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('text_editor');
+    expect(parsed.tool_args.action).toBe('read');
+    expect(parsed.tool_args.path).toBe('.run/verify-sprint76.log');
+  });
+
+  it('recovers markdown Read buried inside a valid response envelope', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: [
+            'The upstream model returned assistant text instead of Agent Zero JSON, so it was normalized into a response tool envelope.',
+          ],
+          headline: 'Invoking response',
+          tool_name: 'response',
+          tool_args: {
+            text: '**Read** `.run/verify-sprint76.log`\n\n**Read** `scripts/verification_status.snapshot.json`',
+          },
+        }),
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('text_editor');
+    expect(parsed.tool_args.action).toBe('read');
+    expect(parsed.tool_args.path).toBe('.run/verify-sprint76.log');
+  });
+
+  it('recovers fenced terminal code after a markdown code_execution_tool heading', () => {
+    const c = parseMarkdownToolFence(
+      [
+        "The file is empty, so I'll write it directly.",
+        '',
+        '**code_execution_tool (terminal)**',
+        '```bash',
+        'cd /a0/usr/projects/localtradeos && wc -l apps/api/services/doctrine.py',
+        '```',
+      ].join('\n'),
+    );
+    expect(c?.name).toBe('code_execution_tool');
+    expect(c?.args.runtime).toBe('terminal');
+    expect(c?.args.code).toBe(
+      'cd /a0/usr/projects/localtradeos && wc -l apps/api/services/doctrine.py',
+    );
+    expect(c?.preface).toContain('file is empty');
+  });
+
+  it('recovers fenced terminal code buried inside a valid response envelope', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: ['I need to run the write command.'],
+          headline: 'Invoking response',
+          tool_name: 'response',
+          tool_args: {
+            text: [
+              '**code_execution_tool (terminal)**',
+              '```bash',
+              'cd /a0/usr/projects/localtradeos && cat apps/api/services/doctrine.py | wc -l',
+              '```',
+            ].join('\n'),
+          },
+        }),
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.runtime).toBe('terminal');
+    expect(parsed.tool_args.code).toBe(
+      'cd /a0/usr/projects/localtradeos && cat apps/api/services/doctrine.py | wc -l',
+    );
+  });
+
+  it('recovers stringified Agent Zero tool JSON buried inside a response envelope', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: [
+            'The upstream model returned assistant text instead of Agent Zero JSON, so it was normalized into a response tool envelope.',
+          ],
+          headline: 'Invoking response',
+          tool_name: 'response',
+          tool_args: {
+            text: JSON.stringify({
+              thoughts: ['The empty file exists. Let me write the loader via terminal.'],
+              headline: 'Invoking code_execution_tool',
+              tool_name: 'code_execution_tool',
+              tool_args: {
+                runtime: 'terminal',
+                code: 'cd /a0/usr/projects/localtradeos && python - <<PY\nprint("write")\nPY',
+              },
+            }),
+          },
+        }),
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.runtime).toBe('terminal');
+    expect(parsed.tool_args.code).toContain('print("write")');
+  });
+
+  it('repairs malformed stringified Agent Zero JSON with headline inside thoughts array', () => {
+    const malformed =
+      '{"thoughts":["Just an import-sort issue. Auto-fix it.","headline":"Invoking code_execution_tool","tool_name":"code_execution_tool","tool_args":{"runtime":"terminal","code":"cd /a0/usr/projects/localtradeos && .venv/bin/python -m ruff check --fix apps/"}}';
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: [
+            'The upstream model returned assistant text instead of Agent Zero JSON, so it was normalized into a response tool envelope.',
+          ],
+          headline: 'Invoking response',
+          tool_name: 'response',
+          tool_args: { text: malformed },
+        }),
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.runtime).toBe('terminal');
+    expect(parsed.tool_args.code).toContain('ruff check --fix apps/');
+  });
+});
+
+describe('parseAdapterCommandLine', () => {
+  it('extracts Claude alias command lines such as read plus path', () => {
+    const c = parseAdapterCommandLine(
+      'read\n/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json',
+    );
+    expect(c?.name).toBe('text_editor');
+    expect(c?.args.action).toBe('read');
+    expect(c?.args.path).toBe(
+      '/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json',
+    );
+  });
+
+  it('lets agent-zero translation recover read plus path instead of wrapping as response', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: 'read\n/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json',
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('text_editor');
+    expect(parsed.tool_args.action).toBe('read');
+    expect(parsed.tool_args.path).toBe(
+      '/a0/usr/projects/localtradeos/scripts/verification_status.snapshot.json',
+    );
+  });
+});
+
+describe('parseFunctionStyleToolCall', () => {
+  it('extracts underscored execution tool calls emitted by Claude', () => {
+    const c = parseFunctionStyleToolCall(
+      '_execution_tool(runtime="terminal", code="cd /a0/usr/projects/localtradeos && cat .run/verify-sprint76.log")',
+    );
+    expect(c?.name).toBe('code_execution_tool');
+    expect(c?.args.runtime).toBe('terminal');
+    expect(c?.args.code).toBe('cd /a0/usr/projects/localtradeos && cat .run/verify-sprint76.log');
+  });
+});
+
+describe('parseBareCodeExecutionArgsJson', () => {
+  it('recovers a bare runtime/code JSON object as code_execution_tool', () => {
+    const c = parseBareCodeExecutionArgsJson(
+      [
+        '`settings` is now unused. Removing it.',
+        '',
+        '{',
+        '  "runtime": "terminal",',
+        '  "code": "cd /a0/usr/projects/localtradeos && .venv/bin/ruff check apps/api/services/rules.py"',
+        '}',
+      ].join('\n'),
+    );
+    expect(c?.name).toBe('code_execution_tool');
+    expect(c?.args.runtime).toBe('terminal');
+    expect(c?.args.code).toBe(
+      'cd /a0/usr/projects/localtradeos && .venv/bin/ruff check apps/api/services/rules.py',
+    );
+  });
+
+  it('lets agent-zero translation recover bare runtime/code JSON instead of wrapping as response', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content:
+          '`settings` is now unused.\n\n{"runtime":"terminal","code":"cd /a0/usr/projects/localtradeos && grep -n \\"settings\\" apps/api/services/rules.py"}',
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.code).toContain('grep -n');
+  });
+});
+
+describe('parseProseTerminalBlock', () => {
+  it('recovers an unfenced shell block after prose', () => {
+    const c = parseProseTerminalBlock(
+      [
+        '`settings` is now unused. Removing the dead assignment and import.',
+        '',
+        '',
+        'cd /a0/usr/projects/localtradeos && python3 - <<\'PY\'',
+        'p = "apps/api/services/rules.py"',
+        's = open(p).read()',
+        'open(p, "w").write(s)',
+        'PY',
+        'grep -n "settings\\|^from\\|^import" apps/api/services/rules.py',
+      ].join('\n'),
+    );
+    expect(c?.name).toBe('code_execution_tool');
+    expect(c?.args.runtime).toBe('terminal');
+    expect(c?.args.code).toContain("python3 - <<'PY'");
+    expect(c?.args.code).toContain('grep -n');
+  });
+
+  it('recovers unfenced shell blocks buried inside response envelopes', () => {
+    const out = translateResponseToConvention(
+      res({
+        role: 'assistant',
+        content: JSON.stringify({
+          thoughts: ['The upstream model returned assistant text instead of Agent Zero JSON.'],
+          headline: 'Invoking response',
+          tool_name: 'response',
+          tool_args: {
+            text: [
+              '`settings` is now unused. Removing it.',
+              '',
+              'cd /a0/usr/projects/localtradeos && python3 - <<\'PY\'',
+              'print("ok")',
+              'PY',
+            ].join('\n'),
+          },
+        }),
+      }),
+      'agent-zero',
+    );
+    const parsed = JSON.parse(out.choices[0]?.message.content as string);
+    expect(parsed.tool_name).toBe('code_execution_tool');
+    expect(parsed.tool_args.code).toContain('print("ok")');
   });
 });
 

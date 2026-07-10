@@ -134,11 +134,13 @@ trueGate :8457
   pick endpoint: model=claude-sonnet-4-6 → exact match → cliproxy
   in-route: normalize Agent Zero envelope contract, strip provider-incompatible response_format for cliproxy when needed
   upstream: POST http://127.0.0.1:8317/v1/chat/completions
-  response: validate + Agent Zero envelope normalization + marker
+  response: validate + Agent Zero envelope normalization
   header:   x-truegate-upstream: cliproxy/claude-sonnet-4-6
 ```
 
 From Docker, `localhost` points at the container. Use `host.docker.internal` for trueGate and any host-local Ollama service.
+
+Agent0 envelope mode deliberately does not append the visible `— trueGate` marker to assistant message content. The route still sets `x-truegate-upstream`, and trueGate strips older trueGate/Governance footers from prior Agent0 assistant history before forwarding it upstream so the model does not see gateway-authored footers as its own authored text.
 
 ## Request lifecycle: Cursor → trueGate → Ollama
 

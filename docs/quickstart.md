@@ -58,7 +58,8 @@ With no flags, trueGate probes every potential upstream and builds a live regist
 [truegate] lmstudio   localhost:1234   ✗ unreachable
 [truegate] mode=auto, priority=openai>anthropic>github-copilot>cliproxy>ollama>lmstudio
 trueGate proxy listening on http://localhost:8457
-  → governance: bundled defaults (data/) + operator overrides (.state/)
+  → policy mode: targeted
+  → governance: response validation + logs always on
 ```
 
 To force a specific upstream instead of auto-detecting:
@@ -67,6 +68,18 @@ To force a specific upstream instead of auto-detecting:
 truegate serve --provider cliproxy    # always use CLIProxyAPI
 truegate serve --provider ollama      # always use local Ollama
 truegate serve --provider openai --token sk-...
+```
+
+Prompt policy defaults to `targeted`, which injects a small request-specific
+snippet and still validates responses. Use `off` for no prompt injection,
+`light` for a generic short reminder, or `full` for the complete operator
+governance bundle:
+
+```bash
+truegate serve --policy-mode off
+truegate serve --policy-mode targeted
+truegate serve --policy-mode light
+truegate serve --policy-mode full
 ```
 
 ---
@@ -116,7 +129,7 @@ trueGate ships with sensible defaults in `data/`. To add your own rules:
 truegate global-init   # creates .state/governance.md + .state/rules.yaml
 ```
 
-Edit `.state/governance.md` in any text editor — changes take effect within 5 seconds, no restart needed. See [governance.md](./governance.md) for the full schema.
+Edit `.state/governance.md` in any text editor — changes take effect within 5 seconds, no restart needed. The prose file is injected only when `policyMode` is `full`; `targeted` uses a short built-in snippet selected from request text. `rules.yaml` response validation runs in every mode. See [governance.md](./governance.md) for the full schema.
 
 ---
 

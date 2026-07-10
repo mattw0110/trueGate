@@ -28,6 +28,70 @@ import type {
   ResponsesOutputItem,
 } from '../../types/responses-api.js';
 
+function responsesInputText(input: ResponsesRequest['input']): string {
+  if (typeof input === 'string') return input;
+  if (!Array.isArray(input)) return '';
+  return input
+    .map((message) => {
+      if (typeof message.content === 'string') return message.content;
+      return message.content
+        .map((part) => ('text' in part && typeof part.text === 'string' ? part.text : ''))
+        .filter(Boolean)
+        .join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function responsesRequestText(body: ResponsesRequest): string {
+  return [body.instructions ?? '', responsesInputText(body.input)].filter(Boolean).join('\n\n');
+}
+
+function isRoleMessage(value: unknown): value is { role: string; [key: string]: unknown } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'role' in value &&
+    typeof (value as { role?: unknown }).role === 'string'
+  );
+}
+
+function systemMessagesBeforeAssistant<T extends { role: string }>(messages: T[]): T[] {
+  const firstAssistant = messages.findIndex((message) => message.role === 'assistant');
+  if (firstAssistant === -1) return messages;
+
+  const lateSystemMessages = messages
+    .slice(firstAssistant + 1)
+    .filter((message) => message.role === 'system');
+  if (lateSystemMessages.length === 0) return messages;
+
+  const withoutLateSystemMessages = messages.filter(
+    (message, index) => index <= firstAssistant || message.role !== 'system',
+  );
+  return [
+    ...withoutLateSystemMessages.slice(0, firstAssistant),
+    ...lateSystemMessages,
+    ...withoutLateSystemMessages.slice(firstAssistant),
+  ];
+}
+
+function normalizeResponsesSystemMessageOrder(req: ResponsesRequest): ResponsesRequest {
+  let next: ResponsesRequest = req;
+
+  const unknownBody = req as ResponsesRequest & { messages?: unknown };
+  if (Array.isArray(unknownBody.messages) && unknownBody.messages.every(isRoleMessage)) {
+    const messages = systemMessagesBeforeAssistant(unknownBody.messages);
+    if (messages !== unknownBody.messages) next = { ...next, messages };
+  }
+
+  if (Array.isArray(next.input) && next.input.every(isRoleMessage)) {
+    const input = systemMessagesBeforeAssistant(next.input);
+    if (input !== next.input) next = { ...next, input };
+  }
+
+  return next;
+}
+
 function applyMarkerToResponse(resp: ResponsesResponse, marker: string): ResponsesResponse {
   if (!marker) return resp;
   const suffix = markerSuffix(marker);
@@ -89,13 +153,17 @@ export function registerResponsesRoute(
     let body = request.body;
 
     if (context) {
-      body = injectGovernanceIntoResponses(body, context, {
+      const injectOptions: Parameters<typeof injectGovernanceIntoResponses>[2] = {
         stripClientSystem: config.stripClientSystem ?? false,
-      });
+      };
+      if (config.policyMode !== undefined) injectOptions.policyMode = config.policyMode;
+      injectOptions.sourceText = responsesRequestText(body);
+      body = injectGovernanceIntoResponses(body, context, injectOptions);
     } else if (config.stripClientSystem) {
       const { instructions: _drop, ...rest } = body;
       body = rest as ResponsesRequest;
     }
+    body = normalizeResponsesSystemMessageOrder(body);
 
     // Forward client headers (auth) verbatim; strip hop-by-hop noise.
     const headers: Record<string, string> = { 'content-type': 'application/json' };

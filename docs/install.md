@@ -199,7 +199,7 @@ curl -sS http://localhost:8457/v1/chat/completions \
   -d '{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"reply: ok"}],"max_tokens":20}'
 ```
 
-Every response ends with `— trueGate · provider/model` and carries `x-truegate-upstream: provider/model` header confirming which backend served it.
+Normal chat responses end with `— trueGate · provider/model`, and routed responses carry `x-truegate-upstream: provider/model` confirming which backend served them. Agent0 JSON-envelope turns use the header only so gateway metadata does not become part of Claude's conversation history.
 
 For Dockerized Agent Zero / Agent0, use the OpenAI-compatible route from inside the container:
 

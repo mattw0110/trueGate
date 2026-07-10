@@ -8,6 +8,7 @@ export type ProviderName =
   | 'custom';
 
 export type TrueGateMode = 'auto' | 'locked';
+export type PolicyMode = 'off' | 'targeted' | 'light' | 'full';
 
 export interface TrueGateConfig {
   port: number;
@@ -44,6 +45,8 @@ export interface TrueGateConfig {
    * governance in isolation, not for general production.
    */
   stripClientSystem?: boolean;
+  /** Prompt policy injection mode. Defaults to "off"; validation still runs. */
+  policyMode?: PolicyMode;
   /**
    * Text appended on its own line at the end of every successful response so
    * users can visually confirm the request went through trueGate. Default:
